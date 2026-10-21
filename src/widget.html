@@ -1,0 +1,408 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Send to Phone</title>
+<style>
+  :root {
+    --fg: #fff;
+    --fg2: rgba(255, 255, 255, .74);
+    --shadow-text: 0 1px 2px rgba(0, 0, 0, .28);
+    --veil: rgba(255, 255, 255, .02);
+    --blue: #0a84ff;
+    --green: #30d158;
+    --red: #ff453a;
+    --spring: cubic-bezier(.34, 1.56, .64, 1);
+  }
+  /* Bright wallpaper behind the glass: switch to dark ink, like iOS vibrancy. */
+  .light {
+    --fg: #1d1d1f;
+    --fg2: rgba(29, 29, 31, .64);
+    --shadow-text: 0 1px 1px rgba(255, 255, 255, .35);
+    --veil: rgba(255, 255, 255, .14);
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; user-select: none; }
+  body {
+    font-family: "SF Pro Display", "SF Pro Text", -apple-system, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    cursor: default;
+  }
+
+  .card {
+    position: absolute;
+    left: 16px; top: 16px; width: 136px; height: 136px;
+    border-radius: 34px;
+    overflow: hidden;
+    isolation: isolate;
+    box-shadow: 0 14px 34px -10px rgba(0, 0, 0, .42), 0 2px 6px rgba(0, 0, 0, .14);
+    transition: transform .45s var(--spring), box-shadow .3s ease;
+  }
+  .card:active:not(.busy) { transform: scale(.96); transition-duration: .12s; }
+
+  /* The wallpaper, aligned to the real desktop and blurred = frosted glass. */
+  .wall {
+    position: absolute;
+    background-repeat: no-repeat;
+    filter: blur(9px) saturate(1.6);
+    z-index: -3;
+  }
+  .veil {
+    position: absolute; inset: 0; z-index: -2;
+    background:
+      linear-gradient(160deg, rgba(255, 255, 255, .16) 0%, rgba(255, 255, 255, .02) 46%, rgba(255, 255, 255, 0) 62%, rgba(255, 255, 255, .07) 100%),
+      var(--veil);
+    transition: background-color .3s;
+  }
+  /* Specular highlight that follows the pointer, a nod to Liquid Glass. */
+  .sheen {
+    position: absolute; inset: 0; z-index: -1; opacity: 0;
+    background: radial-gradient(120px circle at var(--mx, 30%) var(--my, 20%), rgba(255, 255, 255, .28), transparent 70%);
+    transition: opacity .4s;
+  }
+  .card:hover .sheen { opacity: 1; }
+  /* Gradient rim: bright top-left edge, faint body, soft bottom-right catch light. */
+  .rim {
+    position: absolute; inset: 0; border-radius: inherit; padding: 1.2px; pointer-events: none;
+    background: linear-gradient(140deg, rgba(255, 255, 255, .85), rgba(255, 255, 255, .14) 32%, rgba(255, 255, 255, .04) 58%, rgba(255, 255, 255, .5));
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+  }
+  .inner-glow {
+    position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    box-shadow: inset 0 1px 1px rgba(255, 255, 255, .45), inset 0 -10px 24px -14px rgba(255, 255, 255, .35);
+  }
+
+  .grab {
+    position: absolute; top: 0; left: 50%; width: 84px; height: 22px; transform: translateX(-50%);
+    -webkit-app-region: drag; z-index: 3;
+    display: grid; place-items: center;
+  }
+  .grab::before {
+    content: ""; width: 34px; height: 5px; border-radius: 3px;
+    background: var(--fg); opacity: 0; transition: opacity .25s;
+  }
+  .card:hover .grab::before { opacity: .38; }
+
+  .content {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 7px; padding: 12px 12px 10px; box-sizing: border-box;
+    color: var(--fg); text-shadow: var(--shadow-text); text-align: center;
+  }
+  .glyph { width: 44px; height: 44px; display: grid; place-items: center; transition: transform .45s var(--spring); }
+  .glyph svg { width: 44px; height: 44px; overflow: visible; filter: drop-shadow(0 1px 2px rgba(0, 0, 0, .25)); }
+  .glyph [data-s] { display: none; }
+  .title { font-size: 13px; font-weight: 600; letter-spacing: -.015em; line-height: 1.15; }
+  .sub {
+    font-size: 10.5px; font-weight: 500; color: var(--fg2); line-height: 1.25; max-width: 112px;
+    display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; word-break: break-word;
+  }
+
+  /* --- states --- */
+  .card[data-state="idle"] .glyph [data-s="idle"],
+  .card[data-state="over"] .glyph [data-s="idle"],
+  .card[data-state="sending"] .glyph [data-s="sending"],
+  .card[data-state="done"] .glyph [data-s="done"],
+  .card[data-state="error"] .glyph [data-s="error"] { display: block; }
+
+  .card[data-state="over"] {
+    transform: scale(1.06);
+    box-shadow: 0 0 0 2.5px rgba(10, 132, 255, .95), 0 18px 40px -10px rgba(10, 132, 255, .55), 0 2px 6px rgba(0, 0, 0, .14);
+  }
+  .card[data-state="over"] .veil { background-color: rgba(10, 132, 255, .16); }
+  .card[data-state="over"] .glyph { transform: translateY(-3px) scale(1.08); }
+  .card[data-state="over"] .arrow { animation: nudge .9s ease-in-out infinite; }
+  @keyframes nudge { 50% { transform: translateY(4px); } }
+
+  .card[data-state="done"] .veil { background-color: rgba(48, 209, 88, .16); }
+  .card[data-state="error"] .veil { background-color: rgba(255, 69, 58, .16); }
+  .card[data-state="error"] { animation: shake .42s ease; }
+  @keyframes shake { 20%, 60% { transform: translateX(-5px); } 40%, 80% { transform: translateX(5px); } }
+
+  .spokes { transform-origin: 28px 28px; animation: spin 0.9s steps(8) infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .check-circle { stroke-dasharray: 145; stroke-dashoffset: 145; }
+  .check-mark { stroke-dasharray: 40; stroke-dashoffset: 40; }
+  .card[data-state="done"] .check-circle { animation: draw .45s ease-out forwards; }
+  .card[data-state="done"] .check-mark { animation: draw .3s .35s ease-out forwards; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  .card[data-state="done"] .glyph { animation: pop .5s var(--spring); }
+  @keyframes pop { 0% { transform: scale(.6); } 100% { transform: scale(1); } }
+
+  /* --- taskbar capsule: no wallpaper layer, the taskbar's own glass shows through --- */
+  body.bar { display: grid; place-items: center; }
+  .bar .card {
+    position: relative; left: auto; top: auto; width: 128px; height: 32px; border-radius: 16px;
+    box-shadow: none; background: rgba(255, 255, 255, .06);
+    transition: transform .4s var(--spring), box-shadow .25s, background-color .25s;
+  }
+  .bar.light .card { background: rgba(0, 0, 0, .04); }
+  .bar .card:hover { background: rgba(255, 255, 255, .11); }
+  .bar.light .card:hover { background: rgba(0, 0, 0, .08); }
+  .bar .wall, .bar .grab, .bar .sub, .bar .inner-glow { display: none; }
+  .bar .veil { background: var(--veil-bar, transparent); }
+  .bar .rim { padding: 1px; background: linear-gradient(170deg, rgba(255, 255, 255, .32), rgba(255, 255, 255, .06) 60%, rgba(255, 255, 255, .14)); }
+  .bar.light .rim { background: linear-gradient(170deg, rgba(0, 0, 0, .10), rgba(0, 0, 0, .04)); }
+  .bar .sheen { background: radial-gradient(60px circle at var(--mx, 30%) var(--my, 50%), rgba(255, 255, 255, .18), transparent 70%); }
+  .bar .content { flex-direction: row; gap: 6px; padding: 0 12px; text-shadow: none; }
+  .bar .glyph, .bar .glyph svg { width: 18px; height: 18px; filter: none; }
+  .bar .title { font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .bar .card[data-state="over"] { transform: scale(1.05); box-shadow: 0 0 0 2px rgba(10, 132, 255, .95); }
+  .bar .card[data-state="over"] .glyph { transform: none; }
+
+  @media (prefers-reduced-transparency: reduce) {
+    .wall { display: none; }
+    .veil { background: rgba(40, 40, 46, .92); }
+  }
+</style>
+</head>
+<body>
+<script>
+  // Shape from the URL before first paint, so the capsule never flashes the desktop tile.
+  { const q = new URLSearchParams(location.search);
+    document.body.classList.toggle('bar', q.get('placement') === 'taskbar');
+    document.body.classList.toggle('light', q.get('light') === '1'); }
+</script>
+  <div class="card" id="card" data-state="idle" role="button" aria-label="Send files to phone">
+    <div class="wall" id="wall"></div>
+    <div class="veil"></div>
+    <div class="sheen"></div>
+    <div class="inner-glow"></div>
+    <div class="rim"></div>
+    <div class="grab" title="Drag to move"></div>
+
+    <div class="content">
+      <div class="glyph">
+        <svg viewBox="0 0 56 56" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+          <!-- idle: iPhone outline with an arrow dropping into it -->
+          <g data-s="idle">
+            <rect x="15" y="6" width="26" height="44" rx="6.5" stroke-width="2.6"/>
+            <path d="M24.5 10.5h7" stroke-width="2.6"/>
+            <g class="arrow">
+              <path d="M28 19v15" stroke-width="2.8"/>
+              <path d="M22.5 28.8 28 34.3l5.5-5.5" stroke-width="2.8"/>
+            </g>
+            <path d="M23 41.5h10" stroke-width="2.6" opacity=".55"/>
+          </g>
+          <!-- sending: Apple-style activity indicator -->
+          <g data-s="sending"><g class="spokes" stroke-width="4">
+            <path d="M28 8v8" opacity="1"/><path d="M42.1 13.9l-5.6 5.6" opacity=".88"/>
+            <path d="M48 28h-8" opacity=".76"/><path d="M42.1 42.1l-5.6-5.6" opacity=".64"/>
+            <path d="M28 48v-8" opacity=".52"/><path d="M13.9 42.1l5.6-5.6" opacity=".4"/>
+            <path d="M8 28h8" opacity=".3"/><path d="M13.9 13.9l5.6 5.6" opacity=".2"/>
+          </g></g>
+          <!-- done -->
+          <g data-s="done" stroke-width="3.2">
+            <circle class="check-circle" cx="28" cy="28" r="22" stroke="#30d158"/>
+            <path class="check-mark" d="M18.5 28.5l6.5 6.5 12.5-13" stroke="#30d158"/>
+          </g>
+          <!-- error -->
+          <g data-s="error" stroke-width="3.2">
+            <circle cx="28" cy="28" r="22" stroke="#ff453a"/>
+            <path d="M28 17v13" stroke="#ff453a"/>
+            <circle cx="28" cy="37.5" r=".6" stroke="#ff453a" stroke-width="3.6"/>
+          </g>
+        </svg>
+      </div>
+      <div class="title" id="title">Send to Phone</div>
+      <div class="sub" id="sub">Drop files or click</div>
+    </div>
+  </div>
+
+<script>
+const card = document.getElementById('card');
+const wall = document.getElementById('wall');
+const titleEl = document.getElementById('title');
+const subEl = document.getElementById('sub');
+
+let geo = null;
+let wp = null;
+let img = null;
+let configured = true;
+let busy = false;
+let resetTimer = null;
+const queue = [];
+
+// ---------- glass: align blurred wallpaper with the real desktop ----------
+function drawRect(W, H) {
+  if (!img) return null;
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const m = wp.mode;
+  if (m === 'stretch') return { x: 0, y: 0, w: W, h: H };
+  if (m === 'center' || m === 'tile') return { x: m === 'tile' ? 0 : (W - iw) / 2, y: m === 'tile' ? 0 : (H - ih) / 2, w: iw, h: ih };
+  const s = m === 'fit' ? Math.min(W / iw, H / ih) : Math.max(W / iw, H / ih);
+  return { x: (W - iw * s) / 2, y: (H - ih * s) / 2, w: iw * s, h: ih * s };
+}
+
+const isBar = () => geo && geo.placement === 'taskbar';
+
+function layoutGlass() {
+  if (!geo) return;
+  document.body.classList.toggle('bar', isBar());
+  if (isBar()) return document.body.classList.toggle('light', !!geo.taskbarLight);
+  if (!wp) return;
+  const box = wp.mode === 'span' ? geo.virtual : geo.display;
+  Object.assign(wall.style, {
+    left: box.x - geo.win.x - geo.margin + 'px',
+    top: box.y - geo.win.y - geo.margin + 'px',
+    width: box.width + 'px',
+    height: box.height + 'px',
+    backgroundColor: wp.color,
+  });
+  const r = drawRect(box.width, box.height);
+  if (r) {
+    wall.style.backgroundImage = `url("${wp.url}")`;
+    wall.style.backgroundSize = `${r.w}px ${r.h}px`;
+    wall.style.backgroundPosition = `${r.x}px ${r.y}px`;
+    wall.style.backgroundRepeat = wp.mode === 'tile' ? 'repeat' : 'no-repeat';
+  } else {
+    wall.style.backgroundImage = 'none';
+  }
+  scheduleLuma();
+}
+
+// Sample brightness of the wallpaper under the tile and pick light or dark ink.
+let lumaTimer = null;
+function scheduleLuma() {
+  clearTimeout(lumaTimer);
+  lumaTimer = setTimeout(updateLuma, 120);
+}
+function updateLuma() {
+  const box = wp.mode === 'span' ? geo.virtual : geo.display;
+  const cx = geo.win.x + geo.margin - box.x, cy = geo.win.y + geo.margin - box.y;
+  let luma;
+  const r = drawRect(box.width, box.height);
+  if (r) {
+    const sx = img.naturalWidth / r.w, sy = img.naturalHeight / r.h;
+    const c = document.createElement('canvas');
+    c.width = c.height = 12;
+    const ctx = c.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = wp.color;
+    ctx.fillRect(0, 0, 12, 12);
+    const tileX = wp.mode === 'tile' ? ((cx % r.w) + r.w) % r.w : cx - r.x;
+    const tileY = wp.mode === 'tile' ? ((cy % r.h) + r.h) % r.h : cy - r.y;
+    ctx.drawImage(img, tileX * sx, tileY * sy, geo.card * sx, geo.card * sy, 0, 0, 12, 12);
+    const d = ctx.getImageData(0, 0, 12, 12).data;
+    let sum = 0;
+    for (let i = 0; i < d.length; i += 4) sum += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    luma = sum / (d.length / 4) / 255;
+  } else {
+    const [R, G, B] = wp.color.match(/\d+/g).map(Number);
+    luma = (0.2126 * R + 0.7152 * G + 0.0722 * B) / 255;
+  }
+  document.body.classList.toggle('light', luma > 0.62);
+}
+
+function setWallpaper(next) {
+  wp = next;
+  if (!wp.url) { img = null; return layoutGlass(); }
+  const i = new Image();
+  i.onload = () => { img = i; layoutGlass(); };
+  i.src = wp.url;
+}
+
+// ---------- states ----------
+function setState(state, title, sub, holdMs) {
+  clearTimeout(resetTimer);
+  card.dataset.state = state;
+  titleEl.textContent = title;
+  subEl.textContent = sub;
+  if (holdMs) resetTimer = setTimeout(idle, holdMs);
+}
+function idle() {
+  setState('idle', isBar() && !configured ? 'Set up' : 'Send to Phone', configured ? 'Drop files or click' : 'Click to set up');
+}
+
+async function sendPaths(paths) {
+  if (!paths.length) return;
+  if (busy) { queue.push(...paths); return; }
+  busy = true;
+  card.classList.add('busy');
+  const name = paths[0].split(/[\\/]/).pop();
+  setState('sending', 'Sending…', paths.length === 1 ? name : `${paths.length} files`);
+  const r = await window.api.send(paths);
+  busy = false;
+  card.classList.remove('busy');
+  if (r.ok) setState('done', r.title, r.detail, 2400);
+  else setState('error', isBar() ? 'Failed' : "Didn't send", r.message, isBar() ? 3500 : 7000);
+  if (queue.length) setTimeout(() => sendPaths(queue.splice(0)), r.ok ? 900 : 7000);
+}
+
+// ---------- input ----------
+let depth = 0;
+// Files, or a link/text dragged from a browser or editor (sent as an ntfy note).
+const hasFiles = (e) => [...(e.dataTransfer?.types || [])].some((t) => t === 'Files' || t === 'text/uri-list' || t === 'text/plain');
+
+function droppedText(dt) {
+  const uri = (dt.getData('text/uri-list') || '').split(/\r?\n/).find((l) => l && !l.startsWith('#'));
+  return (uri || dt.getData('text/plain') || '').trim();
+}
+
+async function sendText(text) {
+  if (busy || !text) return;
+  busy = true;
+  card.classList.add('busy');
+  setState('sending', 'Sending…', /^https?:\/\//i.test(text) ? 'Link' : 'Note');
+  const r = await window.api.sendNote(text);
+  busy = false;
+  card.classList.remove('busy');
+  if (r.ok) setState('done', r.message, 'via ntfy', 2000);
+  else setState('error', isBar() ? 'Failed' : "Didn't send", r.message, isBar() ? 3500 : 7000);
+}
+window.addEventListener('dragenter', (e) => {
+  e.preventDefault();
+  if (!hasFiles(e) || busy) return;
+  if (depth++ === 0) setState('over', isBar() ? 'Drop to send' : 'Release to send', 'Goes to your phone');
+});
+window.addEventListener('dragover', (e) => { e.preventDefault(); e.dataTransfer.dropEffect = hasFiles(e) ? 'copy' : 'none'; });
+window.addEventListener('dragleave', (e) => {
+  e.preventDefault();
+  if (depth > 0 && --depth === 0 && card.dataset.state === 'over') idle();
+});
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  depth = 0;
+  const paths = [...e.dataTransfer.files].map((f) => window.api.pathFor(f)).filter(Boolean);
+  if (card.dataset.state === 'over') idle();
+  if (paths.length) sendPaths(paths);
+  else sendText(droppedText(e.dataTransfer));
+});
+
+card.addEventListener('click', async () => {
+  if (busy) return;
+  if (card.dataset.state === 'error') return idle();
+  if (!configured) return window.api.openSettings();
+  sendPaths(await window.api.pick());
+});
+card.addEventListener('contextmenu', (e) => { e.preventDefault(); window.api.menu(); });
+card.addEventListener('pointermove', (e) => {
+  const b = card.getBoundingClientRect();
+  card.style.setProperty('--mx', e.clientX - b.left + 'px');
+  card.style.setProperty('--my', e.clientY - b.top + 'px');
+});
+
+// ---------- wiring ----------
+window.api.onGeometry((g) => { geo = g; layoutGlass(); });
+window.api.onWallpaper(setWallpaper);
+window.api.onConfigured((c) => { configured = c; if (card.dataset.state === 'idle') idle(); });
+window.api.onExternalSend(sendPaths);
+window.api.onNoteSent((msg) => { if (!busy) setState('done', msg, 'via ntfy', 2000); });
+// Drive uploads report progress; big files can take a while.
+window.api.onProgress((p) => {
+  if (card.dataset.state !== 'sending') return;
+  const pct = Math.round(p * 100) + '%';
+  if (isBar()) titleEl.textContent = `Sending ${pct}`;
+  else subEl.textContent = `Uploading ${pct}`;
+});
+window.api.init().then((s) => {
+  geo = s.geometry;
+  configured = s.configured;
+  if (s.wallpaper) setWallpaper(s.wallpaper); // null in the taskbar, which shows no wallpaper
+  else layoutGlass();
+  idle();
+});
+</script>
+</body>
+</html>

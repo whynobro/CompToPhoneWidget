@@ -1,0 +1,48 @@
+{
+  "name": "phone-widget",
+  "productName": "Send to Phone",
+  "version": "1.0.0",
+  "description": "Translucent Windows 11 taskbar/desktop drop target that sends files, notes and links to your phone (Gmail, Google Drive, or ntfy push).",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "node scripts/start.js",
+    "icon": "node scripts/start.js scripts/make-icon.js",
+    "test": "node test/sender.test.js",
+    "dist": "electron-builder --win nsis"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/whynobro/CompToPhoneWidget.git"
+  },
+  "author": "Michael Fischbach",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "koffi": "^3.3.3",
+    "nodemailer": "^10.1.7",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "electron": "^45.0.0",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.whynobro.sendtophone",
+    "productName": "Send to Phone",
+    "files": [
+      "src/**",
+      "assets/**",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "artifactName": "Send-to-Phone-Setup-${version}.${ext}"
+    }
+  }
+}

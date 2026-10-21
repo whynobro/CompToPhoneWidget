@@ -1,0 +1,253 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Send to Phone Settings</title>
+<style>
+  :root {
+    --bg: transparent;
+    --group: rgba(255, 255, 255, .72);
+    --line: rgba(60, 60, 67, .16);
+    --fg: #1d1d1f;
+    --fg2: rgba(60, 60, 67, .62);
+    --field: rgba(118, 118, 128, .12);
+    --seg: rgba(118, 118, 128, .14);
+    --seg-on: #fff;
+    --blue: #007aff;
+    --green: #248a3d;
+    --red: #d70015;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --group: rgba(44, 44, 46, .72);
+      --line: rgba(84, 84, 88, .5);
+      --fg: #f5f5f7;
+      --fg2: rgba(235, 235, 245, .6);
+      --field: rgba(118, 118, 128, .24);
+      --seg: rgba(118, 118, 128, .24);
+      --seg-on: #636366;
+      --blue: #0a84ff;
+      --green: #30d158;
+      --red: #ff453a;
+    }
+  }
+  html, body { margin: 0; background: var(--bg); }
+  body {
+    font: 13px/1.4 "SF Pro Text", -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); padding: 22px 22px 18px; box-sizing: border-box; min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font: 600 22px/1.2 "SF Pro Display", -apple-system, "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.02em; margin: 0 0 4px; }
+  .lede { color: var(--fg2); margin: 0 0 18px; }
+
+  .seg { display: grid; grid-template-columns: 1fr 1fr 1fr; background: var(--seg); border-radius: 9px; padding: 2px; margin-bottom: 18px; }
+  .seg button {
+    border: 0; background: transparent; color: var(--fg); font: 500 13px/1 inherit; padding: 7px 0; border-radius: 7px; cursor: pointer;
+    transition: background .2s, box-shadow .2s;
+  }
+  .seg button.on { background: var(--seg-on); box-shadow: 0 3px 8px rgba(0, 0, 0, .12), 0 0 0 .5px rgba(0, 0, 0, .04); font-weight: 600; }
+
+  .label { text-transform: uppercase; font-size: 11px; letter-spacing: .02em; color: var(--fg2); margin: 0 0 6px 12px; }
+  .group { background: var(--group); border-radius: 12px; overflow: hidden; margin-bottom: 8px; backdrop-filter: blur(20px); }
+  .row { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-height: 42px; }
+  .row + .row { border-top: .5px solid var(--line); }
+  .row span { width: 96px; flex: none; }
+  .row input {
+    flex: 1; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--fg); font: inherit; padding: 10px 0; text-align: right;
+  }
+  .row input::placeholder { color: var(--fg2); }
+  .foot { color: var(--fg2); font-size: 11.5px; margin: 0 12px 18px; }
+  a { color: var(--blue); text-decoration: none; cursor: pointer; }
+  a:hover { text-decoration: underline; }
+  ol { margin: 4px 0 0; padding-left: 18px; }
+
+  .subscribe { display: flex; gap: 14px; align-items: flex-start; background: var(--group); border-radius: 12px; padding: 12px; margin-bottom: 8px; }
+  .subscribe img { width: 104px; height: 104px; border-radius: 8px; background: #fff; flex: none; }
+  .subscribe ol { color: var(--fg2); font-size: 11.5px; margin: 4px 0 8px; }
+  .btn.small { padding: 6px 12px; font-size: 12px; }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  ::-webkit-scrollbar-button { display: none; }
+
+  .seg { grid-template-columns: repeat(4, 1fr); margin-bottom: 8px; }
+  .explain { color: var(--fg2); font-size: 12px; margin: 0 12px 18px; min-height: 32px; }
+  .row .value { flex: 1; text-align: right; font-weight: 500; }
+  .value.ok { color: var(--green); }
+  .value.err { color: var(--red); }
+
+  .pane { display: none; }
+  .pane.on { display: block; }
+
+  .actions { display: flex; gap: 10px; align-items: center; margin-top: 6px; }
+  .status { flex: 1; font-size: 12px; color: var(--fg2); min-height: 16px; }
+  .status.ok { color: var(--green); }
+  .status.err { color: var(--red); }
+  .btn {
+    border: 0; border-radius: 8px; padding: 8px 16px; font: 600 13px/1 inherit; cursor: pointer;
+    background: var(--field); color: var(--fg);
+  }
+  .btn.primary { background: var(--blue); color: #fff; }
+  .btn:active { opacity: .8; }
+  .btn:disabled { opacity: .5; cursor: default; }
+</style>
+</head>
+<body>
+  <h1>Send to Phone</h1>
+  <p class="lede">How files get from the widget to your phone. No Bluetooth involved.</p>
+
+  <div class="label">Send files to</div>
+  <div class="seg">
+    <button data-m="auto" class="on">Auto</button>
+    <button data-m="email">Gmail</button>
+    <button data-m="drive">Drive</button>
+    <button data-m="ntfy">ntfy</button>
+  </div>
+  <p class="explain" id="explain"></p>
+
+  <div class="pane on" data-p="auto email">
+    <div class="label">Gmail account</div>
+    <div class="group">
+      <label class="row"><span>Address</span><input id="user" type="email" placeholder="you@gmail.com" spellcheck="false"></label>
+      <label class="row"><span>App password</span><input id="pass" type="password" placeholder="16 characters" spellcheck="false"></label>
+      <label class="row"><span>Send to</span><input id="to" type="email" placeholder="Same address" spellcheck="false"></label>
+    </div>
+    <div class="foot">
+      Needs 2-Step Verification on, then <a data-url="https://myaccount.google.com/apppasswords">create an app password</a>
+      (name it "Send to Phone"). Stored encrypted on this PC. Files arrive as attachments in Gmail on your phone. Up to 18 MB per email.
+    </div>
+  </div>
+
+  <div class="pane" data-p="auto drive">
+    <div class="label">Google Drive</div>
+    <div class="group">
+      <div class="row"><span>Status</span><b id="driveStatus" class="value">Checking…</b><button class="btn small" id="connect">Connect</button></div>
+      <label class="row"><span>Folder</span><input id="folder" spellcheck="false" placeholder="From PC"></label>
+    </div>
+    <div class="foot">
+      Any size. Open the Drive app on your phone and look in this folder. Access is limited to files this widget uploads; it can't see the rest of your Drive.
+    </div>
+  </div>
+
+  <div class="pane" data-p="ntfy">
+    <div class="label">ntfy push</div>
+    <div class="group">
+      <label class="row"><span>Topic</span><input id="topic" spellcheck="false"></label>
+      <label class="row"><span>Server</span><input id="server" spellcheck="false" placeholder="https://ntfy.sh"></label>
+    </div>
+    <div class="subscribe">
+      <img id="qr" alt="QR code to subscribe on Android">
+      <div>
+        <b>Subscribe your phone</b>
+        <ol>
+          <li>Install <a data-url="https://ntfy.sh/#subscribe-phone">ntfy</a> (App Store or Play Store).</li>
+          <li><b>Android:</b> scan the code with the camera.<br><b>iPhone:</b> tap <b>+</b> in ntfy and paste the topic.</li>
+          <li>Press Test below.</li>
+        </ol>
+        <button class="btn small" id="copy">Copy topic</button>
+      </div>
+    </div>
+    <div class="foot">
+      Up to 15 MB per file. ntfy.sh keeps files about 3 hours, so save what you need. The topic name works like a password: keep it random.
+    </div>
+  </div>
+
+  <div class="actions">
+    <div class="status" id="status"></div>
+    <button class="btn" id="test">Test</button>
+    <button class="btn primary" id="save">Save</button>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let method = 'auto';
+let driveConnected = false;
+const EXPLAIN = {
+  auto: 'Recommended. Files up to 18 MB arrive in Gmail as attachments. Bigger files go to Google Drive, and you get one email with a link. Each file lands in one place.',
+  email: 'Everything as Gmail attachments. Files over 18 MB will be refused.',
+  drive: 'Everything to your Google Drive folder, any size. No email or notification.',
+  ntfy: 'Instant push with the file attached (up to 15 MB). Files expire after about 3 hours.',
+};
+
+function setMethod(m) {
+  method = m;
+  document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.m === m));
+  document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.dataset.p.split(' ').includes(m)));
+  $('explain').textContent = EXPLAIN[m];
+  status('');
+}
+function showDrive(d) {
+  driveConnected = d.connected;
+  $('driveStatus').textContent = d.connected ? 'Connected' : d.rcloneFound ? 'Not connected' : 'rclone not installed';
+  $('driveStatus').className = 'value ' + (d.connected ? 'ok' : 'err');
+  $('connect').textContent = d.connected ? 'Reconnect' : 'Connect';
+  $('connect').disabled = !d.rcloneFound;
+}
+async function refreshQr() {
+  $('qr').src = await window.api.ntfyQr({ topic: $('topic').value.trim(), server: $('server').value.trim() });
+}
+function status(msg, kind) {
+  $('status').textContent = msg;
+  $('status').className = 'status' + (kind ? ' ' + kind : '');
+}
+function collect() {
+  return {
+    method,
+    email: { user: $('user').value, pass: $('pass').value, to: $('to').value },
+    drive: { folder: $('folder').value },
+    ntfy: { topic: $('topic').value, server: $('server').value },
+  };
+}
+
+$('connect').addEventListener('click', async () => {
+  $('connect').disabled = true;
+  status('Finish signing in to Google in your browser…');
+  const r = await window.api.connectDrive();
+  status(r.message, r.ok ? 'ok' : 'err');
+  showDrive((await window.api.getSettings()).drive);
+});
+
+document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => setMethod(b.dataset.m)));
+document.querySelectorAll('a[data-url]').forEach((a) => a.addEventListener('click', () => window.api.openUrl(a.dataset.url)));
+
+$('topic').addEventListener('input', refreshQr);
+$('server').addEventListener('input', refreshQr);
+$('copy').addEventListener('click', async () => {
+  await navigator.clipboard.writeText($('topic').value.trim());
+  status('Topic copied.', 'ok');
+});
+
+$('test').addEventListener('click', async () => {
+  $('test').disabled = true;
+  status('Testing…');
+  const r = await window.api.testSettings(collect());
+  status(r.message, r.ok ? 'ok' : 'err');
+  $('test').disabled = false;
+});
+$('save').addEventListener('click', async () => {
+  const s = collect();
+  if ((s.method === 'auto' || s.method === 'email') && !s.email.user) return status('Enter your Gmail address.', 'err');
+  if (s.method === 'drive' && !driveConnected) return status('Connect Google Drive first.', 'err');
+  if (s.method === 'ntfy' && !s.ntfy.topic) return status('Enter a topic.', 'err');
+  await window.api.saveSettings(s);
+  $('pass').value = '';
+  $('pass').placeholder = s.email.pass || $('pass').placeholder.startsWith('Saved') ? 'Saved (type to change)' : '16 characters';
+  status('Saved.', 'ok');
+});
+
+window.api.getSettings().then((s) => {
+  $('user').value = s.email.user;
+  $('to').value = s.email.to;
+  if (s.email.hasPass) $('pass').placeholder = 'Saved (type to change)';
+  $('topic').value = s.ntfy.topic;
+  $('server').value = s.ntfy.server;
+  $('folder').value = s.drive.folder;
+  showDrive(s.drive);
+  setMethod(s.method);
+  refreshQr();
+  if (!s.encryption) status('Windows encryption unavailable; password cannot be stored.', 'err');
+});
+</script>
+</body>
+</html>

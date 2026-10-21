@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Send a note</title>
+<style>
+  :root {
+    --fg: #1d1d1f; --fg2: rgba(60, 60, 67, .6); --field: rgba(255, 255, 255, .55); --line: rgba(0, 0, 0, .08);
+    --blue: #007aff; --green: #248a3d; --red: #d70015;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg: #f5f5f7; --fg2: rgba(235, 235, 245, .6); --field: rgba(0, 0, 0, .22); --line: rgba(255, 255, 255, .1); --blue: #0a84ff; --green: #30d158; --red: #ff453a; }
+  }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body {
+    font: 13px/1.4 "SF Pro Text", -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); padding: 14px 14px 12px; box-sizing: border-box;
+    display: flex; flex-direction: column; gap: 10px; -webkit-font-smoothing: antialiased;
+  }
+  header { display: flex; align-items: center; gap: 8px; -webkit-app-region: drag; }
+  header b { font: 600 14px/1 "SF Pro Display", -apple-system, "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.01em; flex: 1; }
+  header svg { width: 16px; height: 16px; }
+  .close { -webkit-app-region: no-drag; border: 0; background: transparent; color: var(--fg2); font-size: 16px; width: 22px; height: 22px; border-radius: 11px; cursor: pointer; line-height: 1; }
+  .close:hover { background: var(--line); }
+  textarea {
+    flex: 1; resize: none; border: .5px solid var(--line); border-radius: 10px; background: var(--field);
+    color: var(--fg); font: inherit; padding: 9px 10px; outline: none;
+  }
+  textarea:focus { border-color: var(--blue); box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 25%, transparent); }
+  footer { display: flex; align-items: center; gap: 10px; }
+  .hint { flex: 1; color: var(--fg2); font-size: 11.5px; }
+  .hint.ok { color: var(--green); }
+  .hint.err { color: var(--red); }
+  .send { border: 0; border-radius: 8px; padding: 7px 16px; font: 600 13px/1 inherit; background: var(--blue); color: #fff; cursor: pointer; }
+  .send:disabled { opacity: .45; cursor: default; }
+</style>
+</head>
+<body>
+  <header>
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="1.5" width="8" height="13" rx="2"/><path d="M7 12.2h2"/></svg>
+    <b id="heading">Send to phone</b>
+    <button class="close" id="close" title="Close (Esc)">×</button>
+  </header>
+  <textarea id="text" placeholder="Type a note or paste a link…" spellcheck="true"></textarea>
+  <footer>
+    <span class="hint" id="hint">Ctrl+Enter to send</span>
+    <button class="send" id="send" disabled>Send</button>
+  </footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const isLink = (t) => /^https?:\/\/\S+$/i.test(t.trim());
+
+function refresh() {
+  const t = $('text').value;
+  $('send').disabled = !t.trim();
+  $('heading').textContent = isLink(t) ? 'Send link to phone' : 'Send note to phone';
+}
+
+async function send() {
+  const t = $('text').value;
+  if (!t.trim()) return;
+  $('send').disabled = true;
+  $('hint').textContent = 'Sending…';
+  $('hint').className = 'hint';
+  const r = await window.api.sendNote(t);
+  if (r.ok) {
+    $('hint').textContent = r.message;
+    $('hint').className = 'hint ok';
+    setTimeout(() => window.api.closeNote(), 650);
+  } else {
+    $('hint').textContent = r.message;
+    $('hint').className = 'hint err';
+    $('send').disabled = false;
+  }
+}
+
+$('text').addEventListener('input', refresh);
+$('send').addEventListener('click', send);
+$('close').addEventListener('click', () => window.api.closeNote());
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') window.api.closeNote();
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); send(); }
+});
+
+window.api.noteInit().then((s) => {
+  $('text').value = s.prefill || '';
+  refresh();
+  $('text').focus();
+  $('text').select();
+});
+</script>
+</body>
+</html>
