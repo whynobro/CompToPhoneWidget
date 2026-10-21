@@ -8,7 +8,8 @@
     "start": "node scripts/start.js",
     "icon": "node scripts/start.js scripts/make-icon.js",
     "test": "node test/sender.test.js",
-    "dist": "electron-builder --win nsis"
+    "dist": "electron-builder --win nsis",
+    "media": "node scripts/start.js scripts/render-media.js"
   },
   "repository": {
     "type": "git",
@@ -24,7 +25,8 @@
   },
   "devDependencies": {
     "electron": "^45.0.0",
-    "electron-builder": "^26.15.3"
+    "electron-builder": "^26.15.3",
+    "gifenc": "^1.0.3"
   },
   "build": {
     "appId": "com.whynobro.sendtophone",
