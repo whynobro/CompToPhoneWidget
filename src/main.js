@@ -11,6 +11,7 @@ const CARD = 136; // desktop glass tile, a bit under a 2x2 block of desktop icon
 const MARGIN = 16; // transparent room for the drop shadow
 const SIZE = CARD + MARGIN * 2;
 const BAR_W = 150; // taskbar capsule window (capsule itself is drawn narrower in CSS)
+const BAR_W_COMPACT = 52; // icon-only capsule once apps crowd the gap left of Start
 const ICON = path.join(__dirname, '..', 'assets', 'icon.png');
 
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -190,13 +191,14 @@ async function positionBar() {
   const widgets = dip(loc.widgets);
   const left = widgets ? widgets.x + widgets.width : t.x + 8;
   const right = start && start.x > left ? start.x : t.x + t.width / 2;
-  let x = Math.round((left + right) / 2 - BAR_W / 2);
-  if (right - left < BAR_W + 8) x = Math.round(right - BAR_W - 4);
-  const next = { x, y: Math.round(t.y), width: BAR_W, height: Math.round(t.height) };
+  const w = right - left >= BAR_W + 8 ? BAR_W : BAR_W_COMPACT;
+  let x = Math.round((left + right) / 2 - w / 2);
+  if (right - left < w + 8) x = Math.round(right - w - 4);
+  const next = { x, y: Math.round(t.y), width: w, height: Math.round(t.height) };
   const cur = widget.getBounds();
   if (cur.x !== next.x || cur.y !== next.y || cur.width !== next.width || cur.height !== next.height) widget.setBounds(next);
   const saved = settings.barBounds;
-  if (!saved || saved.x !== next.x || saved.y !== next.y || saved.height !== next.height) {
+  if (!saved || saved.x !== next.x || saved.y !== next.y || saved.width !== next.width || saved.height !== next.height) {
     settings.barBounds = next;
     saveSettings();
   }

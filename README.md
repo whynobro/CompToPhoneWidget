@@ -79,7 +79,7 @@ Everything is stored on your PC in `%APPDATA%\Send to Phone`. Uninstall from Set
 <details>
 <summary><b>🔬 How the taskbar capsule and the glass work</b></summary>
 
-**Taskbar.** Windows 11 has no taskbar add-in API, so the capsule is a topmost window placed with UI Automation ([src/taskbar.js](src/taskbar.js)) in the gap between the Widgets button and Start. It is re-raised every second, hidden while a fullscreen app is active, and re-positioned every 30 s (Start moves when apps are pinned). The last position is saved, so later launches open in place instead of waiting on UI Automation. Errors show as a Windows toast.
+**Taskbar.** Windows 11 has no taskbar add-in API, so the capsule is a topmost window placed with UI Automation ([src/taskbar.js](src/taskbar.js)) in the gap between the Widgets button and Start. It is re-raised every second, hidden while a fullscreen app is active, and re-positioned every 30 s (Start moves when apps are pinned). When apps crowd the gap, it shrinks to an icon-only pill instead of covering the weather widget. The last position is saved, so later launches open in place instead of waiting on UI Automation. Errors show as a Windows toast.
 
 **Glass.** Windows 11 acrylic only works on framed windows with 8 px corners, so the desktop tile reads your wallpaper (`TranscodedWallpaper` + `WallpaperStyle` from the registry), aligns it to the tile's screen position, and blurs it in CSS. Text flips dark on bright wallpapers. Wallpaper changes are picked up within 20 s.
 

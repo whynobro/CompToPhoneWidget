@@ -151,6 +151,12 @@
   .bar .title { font-size: 12px; font-weight: 600; white-space: nowrap; }
   .bar .card[data-state="over"] { transform: scale(1.05); box-shadow: 0 0 0 2px rgba(10, 132, 255, .95); }
   .bar .card[data-state="over"] .glyph { transform: none; }
+  /* Crowded taskbar: main.js narrows the window, so drop the label and keep an icon pill. */
+  @media (max-width: 100px) {
+    .bar .card { width: 44px; }
+    .bar .content { padding: 0; }
+    .bar .title { display: none; }
+  }
 
   @media (prefers-reduced-transparency: reduce) {
     .wall { display: none; }
