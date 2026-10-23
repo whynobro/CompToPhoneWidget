@@ -277,6 +277,13 @@ function createWidget() {
   });
   // Block navigation if a drop ever slips past the renderer's handler.
   widget.webContents.on('will-navigate', (e) => e.preventDefault());
+  // Alt+F4 destroys the window but the app lives on in the tray; showWidget rebuilds it.
+  win.on('closed', () => {
+    if (win !== widget) return;
+    clearInterval(barTimer);
+    clearInterval(locateTimer);
+    widget = null;
+  });
 
   if (bar) {
     widget.setAlwaysOnTop(true, 'screen-saver');
@@ -338,7 +345,7 @@ function contextMenu() {
       visible: !bar,
       click: (i) => {
         settings.onTop = i.checked;
-        widget.setAlwaysOnTop(i.checked);
+        widget?.setAlwaysOnTop(i.checked);
         saveSettings();
       },
     },
@@ -346,7 +353,7 @@ function contextMenu() {
       label: 'Reset position',
       visible: !bar,
       click: () => {
-        widget.setPosition(defaultPos().x, defaultPos().y);
+        widget?.setPosition(defaultPos().x, defaultPos().y);
         settings.pos = null;
         saveSettings();
       },
@@ -368,7 +375,7 @@ function popupMenu() {
 }
 
 function showWidget() {
-  if (!widget) return;
+  if (!widget) return app.isReady() && createWidget();
   widget.show();
   widget.moveTop();
 }
@@ -403,7 +410,7 @@ async function pickFiles() {
 
 async function pickAndSend() {
   const paths = await pickFiles();
-  if (paths.length) widget.webContents.send('external-send', paths);
+  if (paths.length) widget?.webContents.send('external-send', paths);
 }
 
 ipcMain.handle('send', async (_e, paths) => {
@@ -429,6 +436,7 @@ const NOTE_H = 200;
 // Pops up just above the taskbar capsule, or beside the desktop tile.
 function openNote() {
   if (noteWin && !noteWin.isDestroyed()) return noteWin.focus();
+  if (!widget) createWidget();
   const b = widget.getBounds();
   const wa = screen.getDisplayMatching(b).workArea;
   let x = Math.round(b.x + b.width / 2 - NOTE_W / 2);
