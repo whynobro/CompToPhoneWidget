@@ -1,10 +1,11 @@
 // Renders the README media in docs/media from the app's real widget.html CSS + markup,
-// over a synthetic wallpaper. Run: npm run media (ONLY=banner|states|taskbar|gif for one).
+// over a synthetic wallpaper. Run: npm run media (ONLY=banner|states|taskbar|receive|gif for one).
 const { app, BrowserWindow } = require('electron');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { GIFEncoder, quantize, applyPalette } = require('gifenc');
+const { renderPage } = require('../src/dropserver');
 
 const proj = path.join(__dirname, '..');
 const out = path.join(proj, 'docs', 'media');
@@ -103,11 +104,12 @@ const banner = page(1280, 640, `
   <div class="copy">
     <div class="pill"><i></i>Windows 11 · free &amp; open source</div>
     <h1>Send to<br>Phone</h1>
-    <div class="tag">Drop a file on your taskbar.<br>It's on your phone.</div>
+    <div class="tag">Taskbar to phone in one drop.<br>Phone to PC in one tap.</div>
     <div class="chips">
       <div class="chip"><b style="background:#ea4335"></b>Gmail</div>
       <div class="chip"><b style="background:#34a853"></b>Google Drive</div>
       <div class="chip"><b style="background:#57a7ff"></b>ntfy push</div>
+      <div class="chip"><b style="background:#ffd60a"></b>Wi-Fi QR</div>
     </div>
     <div class="fine">No Bluetooth. No Phone Link. No cables.</div>
   </div>
@@ -165,6 +167,51 @@ const bar = (top, light, state, title, label) => `
     <div class="tray">9:41 AM<br>10/21/2026</div>
   </div>`;
 const taskbarPage = page(1000, 300, bar(28, false, 'idle', 'Send to Phone') + bar(124, false, 'sending', 'Sending 42%') + bar(220, true, 'done', 'Sent'), TB_CSS);
+
+// ---------- receive (phone -> PC) ----------
+// The phone shows the real drop page from dropserver.js, frozen mid-batch (its script stripped).
+const ROWS = [
+  ['IMG_2041.HEIC', '3.1 MB · Sent', 'done', 100],
+  ['lecture-scan.pdf', '840 KB · Sent', 'done', 100],
+  ['clip.mov', '212.4 MB · 64%', 'sending', 64],
+];
+const CHECK = '<svg viewBox="0 0 26 26"><circle cx="13" cy="13" r="13" fill="#30d158"/><path d="M7.5 13.5l3.7 3.7 7.3-7.6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const dropPage = renderPage('My PC')
+  .replace(/<script>[\s\S]*<\/script>/, '')
+  .replace('</style>', ':root { --bg: #000; --card: #1c1c1e; --text: #fff; --sub: #98989f; --track: rgba(120,120,128,.32); } body { padding-top: 54px; }</style>')
+  .replace('<p id="summary" role="status" aria-live="polite"></p>', '<p id="summary">Sending 3 of 3…</p>')
+  .replace('<ul id="list"></ul>', '<ul id="list">' + ROWS.map(([n, m, st, pct]) =>
+    `<li class="row ${st}"><div class="name">${n}</div><div class="state">${st === 'done' ? CHECK : ''}</div><div class="meta">${m}</div><div class="bar"><i style="width:${pct}%"></i></div></li>`).join('') + '</ul>');
+const RX_CSS = `
+  .rphone { position: absolute; left: 96px; top: 34px; width: 286px; height: 572px; border-radius: 46px; background: #0b0b0f; padding: 10px; box-sizing: border-box;
+    box-shadow: 0 0 0 2px rgba(255,255,255,.18), 0 40px 80px -20px rgba(0,0,0,.7); transform: rotate(-3deg); }
+  .rscreen { width: 100%; height: 100%; border-radius: 37px; overflow: hidden; position: relative; background: #000; }
+  .rscreen iframe { border: 0; width: 390px; height: 753px; transform: scale(.682); transform-origin: 0 0; }
+  .island { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); width: 80px; height: 23px; border-radius: 12px; background: #000; z-index: 2; }
+  .rcopy { position: absolute; left: 500px; top: 70px; width: 680px; }
+  .rcopy h2 { font-size: 64px; line-height: 1; margin: 0 0 16px; font-weight: 750; letter-spacing: -.035em; }
+  .rcopy p { font-size: 25px; line-height: 1.35; margin: 0; color: rgba(255,255,255,.86); font-weight: 500; }
+  .rchips { display: flex; gap: 10px; margin-top: 24px; }
+  .rchips div { padding: 9px 15px; border-radius: 12px; font-size: 16px; font-weight: 600; background: rgba(0,0,0,.22); border: 1px solid rgba(255,255,255,.14); }
+  .toast { position: absolute; left: 740px; top: 392px; width: 392px; border-radius: 10px; padding: 14px 16px 16px; box-sizing: border-box;
+    background: rgba(32,32,36,.9); border: 1px solid rgba(255,255,255,.1); box-shadow: 0 24px 50px -16px rgba(0,0,0,.6); font-size: 14px; }
+  .toast .app { display: flex; gap: 8px; align-items: center; font-size: 12px; color: rgba(255,255,255,.75); margin-bottom: 10px; }
+  .toast .app img { width: 16px; height: 16px; }
+  .toast b { display: block; font-size: 15px; margin-bottom: 3px; }
+  .toast span { color: rgba(255,255,255,.75); }
+  .rarc { position: absolute; left: 0; top: 0; }`;
+const receivePage = page(1240, 620, `
+  <div class="rphone"><div class="rscreen"><div class="island"></div><iframe srcdoc="${dropPage.replace(/&/g, '&amp;').replace(/"/g, '&quot;')}"></iframe></div></div>
+  <div class="rcopy">
+    <h2>And back again</h2>
+    <p>Scan the QR code on your PC, pick photos or files.<br>They land in your Downloads folder.</p>
+    <div class="rchips"><div>Same Wi-Fi: any size, no app</div><div>ntfy: from anywhere</div></div>
+  </div>
+  <svg class="rarc" width="1240" height="620"><path d="M404 470 C 450 520, 470 470, 486 446" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="3" stroke-dasharray="2 10" stroke-linecap="round"/>
+    <path d="M476 446 l12 -2 1 13" fill="none" stroke="rgba(255,255,255,.7)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  ${tile(486, 356, 1.15, 'done', 'Received', 'lecture-scan.pdf')}
+  <div class="toast"><div class="app"><img src="${ICON}">Send to Phone</div><b>2 files from your phone</b><span>IMG_2041.HEIC, lecture-scan.pdf</span></div>
+`, RX_CSS);
 
 // ---------- render ----------
 async function open(html, name, w, h, zoom = 2) {
@@ -279,6 +326,7 @@ app.whenReady().then(async () => {
     if (!only || only === 'banner') await shot(banner, 'banner', 1280, 640, 'jpg');
     if (!only || only === 'states') await shot(statesPage, 'states', 1240, 300);
     if (!only || only === 'taskbar') await shot(taskbarPage, 'taskbar', 1000, 300);
+    if (!only || only === 'receive') await shot(receivePage, 'receive', 1240, 620, 'jpg');
     if (!only || only === 'gif') await gif();
   } catch (e) {
     console.error(e);

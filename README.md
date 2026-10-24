@@ -1,4 +1,4 @@
-<a href="https://github.com/whynobro/CompToPhoneWidget/releases/latest"><img src="docs/media/banner.jpg" alt="Send to Phone: drop a file on your taskbar, it's on your phone" width="100%"></a>
+<a href="https://github.com/whynobro/CompToPhoneWidget/releases/latest"><img src="docs/media/banner.jpg" alt="Send to Phone: taskbar to phone in one drop, phone to PC in one tap" width="100%"></a>
 
 <p align="center">
   <a href="https://github.com/whynobro/CompToPhoneWidget/releases/latest"><img src="https://img.shields.io/github/v/release/whynobro/CompToPhoneWidget?style=for-the-badge&color=0a84ff&label=release" alt="Latest release"></a>
@@ -8,18 +8,19 @@
   <a href="LICENSE"><img src="https://img.shields.io/github/license/whynobro/CompToPhoneWidget?style=for-the-badge&color=ff375f" alt="License"></a>
 </p>
 
-<h3 align="center">A little glass drop zone in your Windows 11 taskbar.<br>Drop a file on it. It's on your phone.</h3>
+<h3 align="center">A little glass drop zone in your Windows 11 taskbar.<br>Drop a file on it: it's on your phone. Send one back: it's in Downloads.</h3>
 
 <p align="center">
   <a href="https://github.com/whynobro/CompToPhoneWidget/releases/latest"><b>⬇ Download for Windows 11</b></a>
   &nbsp;·&nbsp; <a href="#-how-it-routes">How it routes</a>
+  &nbsp;·&nbsp; <a href="#-phone-to-pc">Phone to PC</a>
   &nbsp;·&nbsp; <a href="#-setup">Setup</a>
   &nbsp;·&nbsp; <a href="#-for-developers">Developers</a>
 </p>
 
 <p align="center"><img src="docs/media/demo.gif" alt="Dragging a file onto the widget: it highlights, uploads with a percentage, then shows a green check" width="420"></p>
 
-No Bluetooth pairing. No Phone Link. No cables, no cloud account to create. It uses apps your phone already has (Gmail, Google Drive) or a free push app (ntfy), and it opens in about half a second.
+No Bluetooth pairing. No Phone Link. No cables, no cloud account to create. PC to phone uses apps your phone already has (Gmail, Google Drive) or a free push app (ntfy). Phone to PC is a QR code: scan it, pick photos, they're in your Downloads folder. It opens in about half a second.
 
 ## ✨ Features
 
@@ -61,6 +62,8 @@ flowchart LR
 ## 📥 Phone to PC
 
 Right-click the widget → **Receive from phone…** Files land straight in your **Downloads** folder and a toast tells you (click it to show the file).
+
+<p align="center"><img src="docs/media/receive.jpg" alt="The phone's drop page uploading three files while the PC widget shows Received and a toast lists the files" width="100%"></p>
 
 | Way | Phone needs | Limit | How |
 |---|---|---|---|
@@ -107,7 +110,7 @@ npm install
 npm start          # launches detached (clears VS Code's ELECTRON_RUN_AS_NODE)
 npm test           # sender, downloads, drop server and ntfy inbox tests (localhost only)
 npm run dist       # build dist/Send-to-Phone-Setup-<version>.exe (NSIS, per-user)
-npm run media      # re-render docs/media (banner, states, taskbar, demo GIF) from widget.html
+npm run media      # re-render docs/media (banner, states, taskbar, receive, demo GIF) from the real app markup
 npm run icon       # regenerate assets/icon.png + icon.ico
 ```
 

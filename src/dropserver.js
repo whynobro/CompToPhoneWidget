@@ -471,4 +471,4 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
   };
 }
 
-module.exports = { startDropServer, lanAddresses, isPrivateAddress };
+module.exports = { startDropServer, lanAddresses, isPrivateAddress, renderPage };
