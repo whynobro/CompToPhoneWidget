@@ -1,0 +1,164 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'">
+<title>Receive from Phone</title>
+<style>
+  :root {
+    --group: rgba(255, 255, 255, .72);
+    --line: rgba(60, 60, 67, .16);
+    --fg: #1d1d1f;
+    --fg2: rgba(60, 60, 67, .62);
+    --field: rgba(118, 118, 128, .12);
+    --switch-off: rgba(120, 120, 128, .2);
+    --blue: #007aff;
+    --green: #34c759;
+    --red: #d70015;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --group: rgba(44, 44, 46, .72);
+      --line: rgba(84, 84, 88, .5);
+      --fg: #f5f5f7;
+      --fg2: rgba(235, 235, 245, .6);
+      --field: rgba(118, 118, 128, .24);
+      --switch-off: rgba(120, 120, 128, .32);
+      --blue: #0a84ff;
+      --green: #30d158;
+      --red: #ff453a;
+    }
+  }
+  html, body { margin: 0; background: transparent; }
+  [hidden] { display: none !important; }
+  body {
+    font: 13px/1.4 "SF Pro Text", -apple-system, "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--fg); padding: 22px 22px 18px; box-sizing: border-box; min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+  h1 { font: 600 22px/1.2 "SF Pro Display", -apple-system, "Segoe UI Variable Display", "Segoe UI", sans-serif; letter-spacing: -.02em; margin: 0 0 4px; }
+  .lede { color: var(--fg2); margin: 0 0 18px; }
+  a { color: var(--blue); text-decoration: none; cursor: pointer; }
+  a:hover { text-decoration: underline; }
+
+  .label { text-transform: uppercase; font-size: 11px; letter-spacing: .02em; color: var(--fg2); margin: 0 0 6px 12px; }
+  .group { background: var(--group); border-radius: 12px; overflow: hidden; margin-bottom: 8px; }
+  .row { display: flex; align-items: center; gap: 10px; padding: 0 12px; min-height: 42px; }
+  .row + .row { border-top: .5px solid var(--line); }
+  .row .grow { flex: 1; min-width: 0; }
+  .mono { font: 500 12.5px/1.3 "Cascadia Mono", Consolas, monospace; user-select: all; overflow-wrap: anywhere; }
+  .foot { color: var(--fg2); font-size: 11.5px; margin: 0 12px 18px; }
+  .foot b { color: var(--fg); font-weight: 600; }
+
+  .scan { display: flex; gap: 14px; align-items: center; background: var(--group); border-radius: 12px; padding: 12px; margin-bottom: 8px; }
+  .scan img { width: 128px; height: 128px; border-radius: 8px; background: #fff; flex: none; }
+  .scan .ph { width: 128px; height: 128px; border-radius: 8px; background: var(--field); flex: none; display: grid; place-items: center; color: var(--fg2); font-size: 11.5px; text-align: center; }
+  .scan ol { color: var(--fg2); font-size: 12px; margin: 0; padding-left: 18px; }
+  .scan li + li { margin-top: 4px; }
+  .scan li b { color: var(--fg); font-weight: 600; }
+  .off .scan, .off .wifi, .off .inbox { opacity: .45; pointer-events: none; }
+
+  .btn {
+    border: 0; border-radius: 8px; padding: 6px 12px; font: 600 12px/1 inherit; cursor: pointer;
+    background: var(--field); color: var(--fg); flex: none;
+  }
+  .btn:active { opacity: .8; }
+
+  .switch { position: relative; width: 42px; height: 26px; flex: none; }
+  .switch input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+  .switch i { position: absolute; inset: 0; border-radius: 13px; background: var(--switch-off); transition: background .2s; pointer-events: none; }
+  .switch i::after {
+    content: ""; position: absolute; top: 2px; left: 2px; width: 22px; height: 22px; border-radius: 50%; background: #fff;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, .2); transition: transform .25s cubic-bezier(.34, 1.56, .64, 1);
+  }
+  .switch input:checked + i { background: var(--green); }
+  .switch input:checked + i::after { transform: translateX(16px); }
+
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
+  ::-webkit-scrollbar-button { display: none; }
+
+  .status { font-size: 12px; color: var(--red); min-height: 16px; margin: -8px 12px 12px; }
+  .status.ok { color: var(--green); }
+</style>
+</head>
+<body>
+  <h1>Receive from Phone</h1>
+  <p class="lede">Photos and files from your phone land in <a id="folder">Downloads</a>.</p>
+
+  <div class="group">
+    <label class="row"><span class="grow"><b>Receive files</b></span><span class="switch"><input id="on" type="checkbox"><i></i></span></label>
+  </div>
+  <div class="status" id="status"></div>
+
+  <div id="body">
+    <div class="label">Same Wi-Fi, any phone</div>
+    <div class="scan">
+      <img id="qr" alt="QR code that opens the drop page on your phone" hidden>
+      <div class="ph" id="noqr">Not running</div>
+      <ol>
+        <li>Point your phone's <b>camera</b> at the code and open the link.</li>
+        <li>Tap <b>Choose photos or files</b>.</li>
+        <li>They show up in Downloads. Any size.</li>
+      </ol>
+    </div>
+    <div class="group wifi">
+      <div class="row"><span class="grow mono" id="url">...</span><button class="btn" id="copyUrl">Copy</button></div>
+    </div>
+    <div class="foot">
+      No app needed. <b>Add to Home Screen</b> on the phone for one tap next time.
+      If Windows asks about network access, allow <b>Private networks</b>.
+      <span id="others"></span> <a id="reset">New link</a> locks out the old one.
+    </div>
+
+    <div class="label">Anywhere, with ntfy</div>
+    <div class="group inbox">
+      <div class="row"><span class="grow mono" id="topic">...</span><button class="btn" id="copyTopic">Copy</button></div>
+    </div>
+    <div class="foot">
+      <b>Android:</b> Share, pick <b>ntfy</b>, enter this topic, Send.
+      <b>Elsewhere:</b> open <span class="mono" id="web"></span>, attach with the paperclip.
+      Up to 15 MB; held about 3 hours if the PC is off. Shared text lands on the clipboard.
+    </div>
+  </div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let info = null;
+
+function show(r) {
+  info = r;
+  $('on').checked = r.on;
+  document.body.classList.toggle('off', !r.on);
+  $('qr').hidden = !(r.on && r.qr);
+  $('noqr').hidden = !$('qr').hidden;
+  if (r.qr) $('qr').src = r.qr;
+  $('noqr').textContent = r.on ? 'No network' : 'Off';
+  $('url').textContent = r.urls[0] ? r.urls[0].replace(/^http:\/\//, '') : r.on ? 'No network connection' : 'Turned off';
+  $('others').textContent = r.urls.length > 1 ? `Also: ${r.urls.slice(1).map((u) => u.replace(/^http:\/\/|\/[^/]*$/g, '')).join(', ')}.` : '';
+  $('topic').textContent = r.topic;
+  $('web').textContent = `${r.server.replace(/^https?:\/\//, '')}/${r.topic}`;
+  status(r.error);
+}
+function status(msg, kind) {
+  $('status').textContent = msg || '';
+  $('status').className = 'status' + (kind ? ' ' + kind : '');
+}
+async function copy(text, what) {
+  await navigator.clipboard.writeText(text);
+  status(`${what} copied.`, 'ok');
+}
+
+$('on').addEventListener('change', async () => show(await window.api.setReceive($('on').checked)));
+$('copyUrl').addEventListener('click', () => info?.urls[0] && copy(info.urls[0], 'Link'));
+$('copyTopic').addEventListener('click', () => info && copy(info.topic, 'Topic'));
+$('folder').addEventListener('click', () => window.api.openDownloads());
+$('reset').addEventListener('click', async () => {
+  show(await window.api.resetReceive());
+  status('New link made. The old one no longer works.', 'ok');
+});
+
+window.api.getReceive().then(show);
+</script>
+</body>
+</html>

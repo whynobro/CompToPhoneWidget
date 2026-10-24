@@ -395,6 +395,7 @@ window.api.onWallpaper(setWallpaper);
 window.api.onConfigured((c) => { configured = c; if (card.dataset.state === 'idle') idle(); });
 window.api.onExternalSend(sendPaths);
 window.api.onNoteSent((msg) => { if (!busy) setState('done', msg, 'via ntfy', 2000); });
+window.api.onReceived((name) => { if (!busy && card.dataset.state !== 'over') setState('done', 'Received', name, 2400); });
 // Drive uploads report progress; big files can take a while.
 window.api.onProgress((p) => {
   if (card.dataset.state !== 'sending') return;

@@ -95,7 +95,7 @@
 </head>
 <body>
   <h1>Send to Phone</h1>
-  <p class="lede">How files get from the widget to your phone. No Bluetooth involved.</p>
+  <p class="lede">How files get from the widget to your phone. No Bluetooth involved. Going the other way? <a id="receive">Receive from phone</a></p>
 
   <div class="label">Send files to</div>
   <div class="seg">
@@ -209,6 +209,7 @@ $('connect').addEventListener('click', async () => {
 });
 
 document.querySelectorAll('.seg button').forEach((b) => b.addEventListener('click', () => setMethod(b.dataset.m)));
+$('receive').addEventListener('click', () => window.api.openReceive());
 document.querySelectorAll('a[data-url]').forEach((a) => a.addEventListener('click', () => window.api.openUrl(a.dataset.url)));
 
 $('topic').addEventListener('input', refreshQr);

@@ -1,9 +1,12 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, Tray, screen, safeStorage, nativeImage, nativeTheme, shell, Notification, clipboard } = require('electron');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execFile, execFileSync } = require('child_process');
 const sender = require('./sender');
+const dropserver = require('./dropserver');
+const { startInbox } = require('./ntfyinbox');
 const taskbar = require('./taskbar');
 const { readWallpaper, watchWallpaper } = require('./wallpaper');
 
@@ -28,6 +31,9 @@ const DEFAULTS = {
   pos: null,
   barBounds: null, // last UI Automation fix, so the capsule opens in place instead of jumping
   onTop: false,
+  // Phone -> PC. Off until the Receive window is first opened, so the Windows firewall
+  // prompt for the Wi-Fi page shows up when the user is expecting it, not at boot.
+  receive: { on: null, port: 47800, token: '', topic: '', cursor: '' },
 };
 
 function loadSettings() {
@@ -40,6 +46,7 @@ function loadSettings() {
       email: { ...DEFAULTS.email, ...s.email },
       drive: { ...DEFAULTS.drive, ...s.drive },
       ntfy: { ...DEFAULTS.ntfy, ...s.ntfy },
+      receive: { ...DEFAULTS.receive, ...s.receive },
     };
   } catch {
     return structuredClone(DEFAULTS);
@@ -51,8 +58,12 @@ function saveSettings() {
   fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
   fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
 }
-if (!settings.ntfy.topic) {
-  settings.ntfy.topic = 'phone-' + crypto.randomBytes(6).toString('hex');
+// Short enough to type off the screen, no look-alike characters (0/o, 1/l/i).
+const newToken = () => [...crypto.randomBytes(8)].map((b) => 'abcdefghjkmnpqrstuvwxyz23456789'[b % 31]).join('');
+if (!settings.ntfy.topic || !settings.receive.token || !settings.receive.topic) {
+  settings.ntfy.topic ||= 'phone-' + crypto.randomBytes(6).toString('hex');
+  settings.receive.token ||= newToken();
+  settings.receive.topic ||= 'pc-' + crypto.randomBytes(6).toString('hex');
   saveSettings();
 }
 
@@ -145,6 +156,7 @@ function refreshTaskbarLight() {
 let widget = null;
 let settingsWin = null;
 let noteWin = null;
+let receiveWin = null;
 let tray = null;
 let barTimer = null;
 let locateTimer = null;
@@ -333,6 +345,7 @@ function contextMenu() {
   return Menu.buildFromTemplate([
     { label: 'Send a note or link…', click: openNote },
     { label: 'Send files…', click: () => pickAndSend() },
+    { label: 'Receive from phone…', click: openReceive },
     { label: 'Settings…', click: openSettings },
     { type: 'separator' },
     { label: 'In taskbar', type: 'radio', checked: bar, click: () => setPlacement('taskbar') },
@@ -486,6 +499,142 @@ ipcMain.handle('note:send', async (_e, text) => {
   }
 });
 
+// ---------- receiving (phone -> PC, straight into Downloads) ----------
+let drop = null; // Wi-Fi drop page server
+let inbox = null; // ntfy inbox subscription
+let dropError = '';
+let arrived = [];
+let arrivedTimer = null;
+
+const downloadsDir = () => app.getPath('downloads');
+
+// Several photos at once should be one toast, not five.
+function received(f) {
+  arrived.push(f);
+  widget?.webContents.send('received', f.name);
+  clearTimeout(arrivedTimer);
+  arrivedTimer = setTimeout(() => {
+    const files = arrived.splice(0);
+    if (!Notification.isSupported()) return;
+    const n = new Notification({
+      title: files.length === 1 ? 'From your phone' : `${files.length} files from your phone`,
+      body: files.length === 1 ? `${files[0].name} is in Downloads` : files.map((x) => x.name).join(', '),
+      icon: ICON,
+      silent: true,
+    });
+    n.on('click', () => (files.length === 1 ? shell.showItemInFolder(files[0].path) : shell.openPath(downloadsDir())));
+    n.show();
+  }, 1500);
+}
+
+// Text shared to the inbox: links open on click, anything else goes on the clipboard.
+function receivedText({ title, message, click }) {
+  const text = String(message || '').trim();
+  const url = [click, text].find((u) => /^https?:\/\/\S+$/i.test(u || ''));
+  if (!url) clipboard.writeText(text);
+  widget?.webContents.send('received', url ? 'Link' : 'Note');
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ title: title || (url ? 'Link from your phone' : 'Copied from your phone'), body: text, icon: ICON, silent: true });
+  if (url) n.on('click', () => shell.openExternal(url));
+  n.show();
+}
+
+async function startReceiving() {
+  const r = settings.receive;
+  if (!drop) {
+    try {
+      drop = await dropserver.startDropServer({ port: r.port, token: r.token, dir: downloadsDir, pcName: os.hostname(), onReceived: received });
+      dropError = '';
+      if (drop.port !== r.port) {
+        r.port = drop.port;
+        saveSettings();
+      }
+    } catch (err) {
+      dropError = String(err.message || err);
+    }
+  }
+  inbox ||= startInbox({
+    server: settings.ntfy.server,
+    topic: r.topic,
+    since: r.cursor,
+    dir: downloadsDir,
+    onFile: received,
+    onText: receivedText,
+    onCursor: (id) => {
+      settings.receive.cursor = id;
+      saveSettings();
+    },
+    onStatus: (state, err) => state === 'error' && notify("Didn't receive", String(err?.message || err)),
+  });
+}
+
+async function stopReceiving() {
+  inbox?.stop();
+  inbox = null;
+  const d = drop;
+  drop = null;
+  await d?.close();
+}
+
+async function receiveInfo() {
+  const r = settings.receive;
+  const ips = drop ? dropserver.lanAddresses() : [];
+  const urls = ips.map((ip) => `http://${ip}:${drop.port}/${r.token}`);
+  return {
+    on: !!r.on,
+    urls,
+    qr: urls[0] ? await require('qrcode').toDataURL(urls[0], { margin: 1, width: 240 }) : '',
+    error: r.on && !drop ? dropError || 'Wi-Fi page is not running.' : r.on && !urls.length ? 'No Wi-Fi or network connection found.' : '',
+    topic: r.topic,
+    server: settings.ntfy.server.replace(/\/+$/, ''),
+    folder: downloadsDir(),
+  };
+}
+
+function openReceive() {
+  if (receiveWin && !receiveWin.isDestroyed()) return receiveWin.focus();
+  receiveWin = new BrowserWindow({
+    width: 440,
+    height: 690,
+    resizable: false,
+    maximizable: false,
+    minimizable: false,
+    title: 'Receive from Phone',
+    icon: ICON,
+    backgroundColor: '#00000000',
+    backgroundMaterial: 'mica',
+    autoHideMenuBar: true,
+    webPreferences: { preload: path.join(__dirname, 'preload.js'), sandbox: false },
+  });
+  receiveWin.setMenu(null);
+  receiveWin.loadFile(path.join(__dirname, 'receive.html'));
+}
+
+ipcMain.on('receive:open', openReceive);
+ipcMain.handle('receive:get', async () => {
+  if (settings.receive.on === null) {
+    settings.receive.on = true;
+    saveSettings();
+  }
+  if (settings.receive.on) await startReceiving();
+  return receiveInfo();
+});
+ipcMain.handle('receive:set', async (_e, on) => {
+  settings.receive.on = !!on;
+  saveSettings();
+  await (on ? startReceiving() : stopReceiving());
+  return receiveInfo();
+});
+// Anyone who saw the old link (or scanned the old QR) is locked out.
+ipcMain.handle('receive:reset', async () => {
+  settings.receive.token = newToken();
+  saveSettings();
+  await stopReceiving();
+  if (settings.receive.on) await startReceiving();
+  return receiveInfo();
+});
+ipcMain.on('receive:folder', () => shell.openPath(downloadsDir()));
+
 ipcMain.handle('settings:get', async () => ({
   method: settings.method,
   email: { user: settings.email.user, to: settings.email.to, hasPass: !!settings.email.passEnc },
@@ -519,9 +668,18 @@ ipcMain.handle('settings:save', async (_e, s) => {
   settings.email.to = (s.email.to || '').trim();
   if (s.email.pass) settings.email.passEnc = await encryptPass(s.email.pass);
   settings.drive.folder = (s.drive.folder || 'From PC').trim().replace(/[\\:]/g, '');
-  settings.ntfy.server = (s.ntfy.server || 'https://ntfy.sh').trim();
+  const server = (s.ntfy.server || 'https://ntfy.sh').trim();
+  const serverChanged = server !== settings.ntfy.server;
+  settings.ntfy.server = server;
   settings.ntfy.topic = (s.ntfy.topic || '').trim();
   saveSettings();
+  if (serverChanged && inbox) {
+    // The inbox lives on the same ntfy server; its cursor means nothing on a new one.
+    inbox.stop();
+    inbox = null;
+    settings.receive.cursor = '';
+    startReceiving();
+  }
   widget?.webContents.send('configured', isConfigured());
   return true;
 });
@@ -569,6 +727,7 @@ app.whenReady().then(() => {
   if (firstRun) app.setLoginItemSettings({ ...loginItem(), openAtLogin: true });
   createWidget();
   createTray();
+  if (settings.receive.on) startReceiving();
   screen.on('display-metrics-changed', () => (inTaskbar() ? positionBar() : pushGeo()));
   watchWallpaper(() => !inTaskbar() && widget?.webContents.send('wallpaper', readWallpaper()));
   nativeTheme.on('updated', refreshTaskbarLight);

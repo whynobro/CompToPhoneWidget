@@ -26,5 +26,12 @@ contextBridge.exposeInMainWorld('api', {
   openNote: () => ipcRenderer.send('note:open'),
   onNoteSent: on('note-sent'),
   onProgress: on('progress'),
+
+  getReceive: () => ipcRenderer.invoke('receive:get'),
+  setReceive: (on) => ipcRenderer.invoke('receive:set', on),
+  resetReceive: () => ipcRenderer.invoke('receive:reset'),
+  openDownloads: () => ipcRenderer.send('receive:folder'),
+  openReceive: () => ipcRenderer.send('receive:open'),
+  onReceived: on('received'),
   openUrl: (url) => ipcRenderer.send('open-url', url),
 });

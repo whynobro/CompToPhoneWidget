@@ -28,6 +28,7 @@ No Bluetooth pairing. No Phone Link. No cables, no cloud account to create. It u
 | 🪟 **Lives in the taskbar** | A capsule parked between the weather widget and Start. Hides itself when a game or video goes fullscreen. |
 | 🧊 **Or on the desktop** | A 136 px frosted-glass tile that blurs your real wallpaper and flips to dark text on bright backgrounds. |
 | 📎 **Any file, any size** | Small files ride as Gmail attachments. Big ones upload to Google Drive and arrive as a link in the same email. |
+| 📥 **And back again** | Phone to PC: scan a QR code, pick photos or files, they land in your Downloads folder. Same Wi-Fi, any size, no app. |
 | 🔗 **Links and notes too** | Drag a link or selected text onto it, or right-click → *Send a note or link*. Lands as an instant push notification. |
 | 📶 **Live progress** | Upload percentage right on the widget, plus a check mark (or a clear error) when it's done. |
 | 🔒 **Your keys stay home** | The Gmail app password is encrypted with Windows DPAPI. Drive access is limited to files this app uploaded. |
@@ -57,6 +58,17 @@ flowchart LR
 | **Google Drive** | Drive app | Any size | Uploaded with [rclone](https://rclone.org) to a `From PC` folder, scope `drive.file` (it only sees its own uploads). Connect in Settings opens a Google consent page. |
 | **Push (ntfy)** | [ntfy](https://ntfy.sh) app subscribed to your topic | 15 MB per file | Instant, no account. ntfy.sh keeps files about 3 hours. The topic name acts as the password. |
 
+## 📥 Phone to PC
+
+Right-click the widget → **Receive from phone…** Files land straight in your **Downloads** folder and a toast tells you (click it to show the file).
+
+| Way | Phone needs | Limit | How |
+|---|---|---|---|
+| **Wi-Fi drop page** | Just the camera and a browser | Any size | Scan the QR code, tap **Choose photos or files**. Phone and PC on the same network. Add the page to your Home Screen for one tap next time. |
+| **ntfy inbox** | Android: ntfy app. iPhone: any browser | 15 MB per file | Works from anywhere. Android: Share → **ntfy** → enter the inbox topic shown in the window. Elsewhere: open `ntfy.sh/<inbox topic>` and attach with the paperclip. Text and links you share land on the PC clipboard. |
+
+The first time, Windows asks whether Send to Phone may use the network: allow **Private networks**, or the phone can't reach the page. Campus, hotel and other public Wi-Fi often stop devices from seeing each other: use the ntfy inbox there, or [Tailscale](https://tailscale.com) (its `100.x` address, listed in the window, works from anywhere). The page only answers on its secret link, only to local-network addresses, and **New link** in the window locks out anyone who has the old one. Received files carry the same "downloaded from the internet" mark as browser downloads, so SmartScreen still checks anything runnable.
+
 ## 🚀 Setup
 
 1. **Download** `Send-to-Phone-Setup-x.y.z.exe` from [Releases](https://github.com/whynobro/CompToPhoneWidget/releases/latest) and run it. It installs for your user only (no admin) and starts right away.
@@ -74,6 +86,7 @@ Everything is stored on your PC in `%APPDATA%\Send to Phone`. Uninstall from Set
 - **Drop** files on the widget, or **click** it to pick files (multi-select works).
 - **Send a link or note:** drag a link or text onto it, or right-click → **Send a note or link…** (pre-fills a link from your clipboard; Ctrl+Enter sends, Esc closes). Tapping a link notification on the phone opens it.
 - **Right-click** for: Send files, Settings, In taskbar / On desktop, Keep on top and Reset position (desktop), Start with Windows (on by default), Quit.
+- **Receive from phone:** right-click → **Receive from phone…** (or the link at the top of Settings). See [Phone to PC](#-phone-to-pc).
 - **Tray icon:** click it to bring the widget forward.
 
 <details>
@@ -92,7 +105,7 @@ Everything is stored on your PC in `%APPDATA%\Send to Phone`. Uninstall from Set
 ```sh
 npm install
 npm start          # launches detached (clears VS Code's ELECTRON_RUN_AS_NODE)
-npm test           # sender unit tests, no network
+npm test           # sender, downloads, drop server and ntfy inbox tests (localhost only)
 npm run dist       # build dist/Send-to-Phone-Setup-<version>.exe (NSIS, per-user)
 npm run media      # re-render docs/media (banner, states, taskbar, demo GIF) from widget.html
 npm run icon       # regenerate assets/icon.png + icon.ico
@@ -102,7 +115,7 @@ If `npm start` fails with a missing `electron.exe`, npm skipped Electron's insta
 
 **Release:** bump `version` in package.json, `npm run dist`, then `gh release create v<version> dist/Send-to-Phone-Setup-<version>.exe`.
 
-**Code map:** [src/main.js](src/main.js) (windows, tray, IPC, settings) · [src/sender.js](src/sender.js) (Gmail, Drive, ntfy) · [src/taskbar.js](src/taskbar.js) · [src/wallpaper.js](src/wallpaper.js) · [src/widget.html](src/widget.html) · [src/settings.html](src/settings.html)
+**Code map:** [src/main.js](src/main.js) (windows, tray, IPC, settings) · [src/sender.js](src/sender.js) (Gmail, Drive, ntfy) · [src/dropserver.js](src/dropserver.js) (Wi-Fi drop page) · [src/ntfyinbox.js](src/ntfyinbox.js) (ntfy inbox) · [src/downloads.js](src/downloads.js) (saving into Downloads) · [src/taskbar.js](src/taskbar.js) · [src/wallpaper.js](src/wallpaper.js) · [src/widget.html](src/widget.html) · [src/settings.html](src/settings.html) · [src/receive.html](src/receive.html)
 
 ## 📄 License
 
