@@ -1,7 +1,7 @@
 {
   "name": "phone-widget",
   "productName": "Send to Phone",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Translucent Windows 11 taskbar/desktop drop target that sends files, notes and links to your phone (Gmail, Google Drive, or ntfy push), and receives files from it into Downloads.",
   "main": "src/main.js",
   "scripts": {
