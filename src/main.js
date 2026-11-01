@@ -499,7 +499,7 @@ ipcMain.handle('note:send', async (_e, text) => {
   }
 });
 
-// ---------- receiving (phone -> PC, straight into Downloads) ----------
+// ---------- receiving (phone -> PC, into Downloads or a OneDrive folder picked on the phone) ----------
 let drop = null; // Wi-Fi drop page server
 let inbox = null; // ntfy inbox subscription
 let dropError = '';
@@ -507,6 +507,31 @@ let arrived = [];
 let arrivedTimer = null;
 
 const downloadsDir = () => app.getPath('downloads');
+
+// Where the phone may save: Downloads, then each OneDrive that exists on this PC.
+function dropRoots() {
+  const env = process.env;
+  const candidates = [
+    { id: 'downloads', name: 'Downloads', path: downloadsDir() },
+    env.OneDriveConsumer && { id: 'onedrive', name: 'OneDrive', path: env.OneDriveConsumer },
+    env.OneDriveCommercial && { id: 'onedrive-work', name: path.basename(env.OneDriveCommercial), path: env.OneDriveCommercial },
+    env.OneDrive && { id: 'onedrive', name: path.basename(env.OneDrive), path: env.OneDrive },
+  ].filter(Boolean);
+  const ids = new Set();
+  const paths = new Set();
+  return candidates.filter((r) => {
+    const key = path.resolve(r.path).toLowerCase();
+    if (ids.has(r.id) || paths.has(key)) return false;
+    try {
+      if (!fs.statSync(r.path).isDirectory()) return false;
+    } catch {
+      return false;
+    }
+    ids.add(r.id);
+    paths.add(key);
+    return true;
+  });
+}
 
 // Several photos at once should be one toast, not five.
 function received(f) {
@@ -518,11 +543,11 @@ function received(f) {
     if (!Notification.isSupported()) return;
     const n = new Notification({
       title: files.length === 1 ? 'From your phone' : `${files.length} files from your phone`,
-      body: files.length === 1 ? `${files[0].name} is in Downloads` : files.map((x) => x.name).join(', '),
+      body: files.length === 1 ? `${files[0].name} is in ${path.basename(path.dirname(files[0].path))}` : files.map((x) => x.name).join(', '),
       icon: ICON,
       silent: true,
     });
-    n.on('click', () => (files.length === 1 ? shell.showItemInFolder(files[0].path) : shell.openPath(downloadsDir())));
+    n.on('click', () => (files.length === 1 ? shell.showItemInFolder(files[0].path) : shell.openPath(path.dirname(files[0].path))));
     n.show();
   }, 1500);
 }
@@ -543,7 +568,7 @@ async function startReceiving() {
   const r = settings.receive;
   if (!drop) {
     try {
-      drop = await dropserver.startDropServer({ port: r.port, token: r.token, dir: downloadsDir, pcName: os.hostname(), onReceived: received });
+      drop = await dropserver.startDropServer({ port: r.port, token: r.token, roots: dropRoots, pcName: os.hostname(), onReceived: received });
       dropError = '';
       if (drop.port !== r.port) {
         r.port = drop.port;

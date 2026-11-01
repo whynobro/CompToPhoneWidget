@@ -1,15 +1,18 @@
 // Phone -> PC: a tiny LAN HTTP server. The phone opens a page served from here and streams
-// files straight into Downloads. Plain Node (no Electron) so it can be tested directly.
+// files straight into Downloads or a folder it picks. Plain Node (no Electron) so it can be tested directly.
 const http = require('http');
 const net = require('net');
 const os = require('os');
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
-const { saveStream } = require('./downloads');
+const { saveStream, safeName } = require('./downloads');
 
 const WINDOW_MS = 10 * 60 * 1000;
 const MAX_BAD = 20;
 const MAX_TRACKED = 1000;
 const PROGRESS_MS = 250;
+const MAX_FOLDERS = 1000;
 
 // Adapters that never carry a phone's traffic (VMs, WSL, tethering stubs, capture drivers).
 const VIRTUAL = /vethernet|wsl|hyper-v|virtualbox|vmware|loopback|bluetooth|npcap/i;
@@ -72,6 +75,56 @@ function lanAddresses() {
     .filter((ip) => !seen.has(ip) && seen.add(ip));
 }
 
+const WIN = process.platform === 'win32';
+const fold = (p) => (WIN ? p.toLowerCase() : p);
+const within = (base, p) => {
+  const b = fold(base);
+  const q = fold(p);
+  return q === b || q.startsWith(b.endsWith(path.sep) ? b : b + path.sep);
+};
+const folderError = (status, message) => Object.assign(new Error(message), { status });
+const isDir = (p) => {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+};
+
+// A folder the phone asked for (root id + "a/b/c"), proven to sit inside that root even through
+// junctions. Throws an error with .status (400 bad input, 404 gone). Never creates folders, except
+// that the default root with no path is left to saveStream, as before.
+function resolveFolder(roots, rootId, rel) {
+  const root = rootId ? roots.find((r) => r.id === rootId) : roots[0];
+  if (!root) throw folderError(400, 'Unknown destination.');
+  const text = String(rel || '');
+  const bad = () => folderError(400, 'That folder name is not allowed.');
+  if (text.startsWith('/')) throw bad();
+  const segs = text.split('/').filter(Boolean);
+  for (const s of segs) if (s === '.' || s === '..' || s !== safeName(s)) throw bad();
+  const base = path.resolve(root.path);
+  const dir = path.resolve(base, ...segs);
+  if (!within(base, dir)) throw bad();
+  if (!segs.length && root === roots[0]) return { root, dir, rel: '' };
+  let realBase;
+  let realDir;
+  try {
+    realBase = fs.realpathSync(base);
+    realDir = fs.realpathSync(dir);
+  } catch {
+    throw folderError(404, 'That folder no longer exists on the PC.');
+  }
+  if (!within(realBase, realDir)) throw bad();
+  if (!isDir(realDir)) throw folderError(404, 'That folder no longer exists on the PC.');
+  return { root, dir, rel: segs.join('/') };
+}
+
+// Immediate subfolders worth offering: no hidden, no Office lock files, no links, nothing safeName would change.
+async function listFolders(dir) {
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  return entries
+    .filter((e) => e.isDirectory() && !e.isSymbolicLink() && !e.name.startsWith('.') && !e.name.startsWith('~$') && e.name === safeName(e.name))
+    .map((e) => e.name)
+    .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }))
+    .slice(0, MAX_FOLDERS);
+}
+
 const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 const PAGE_CSP = "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'";
@@ -103,8 +156,50 @@ body {
   padding: max(28px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(28px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
 }
 main { max-width: 520px; margin: 0 auto; }
-h1 { margin: 0 0 4px; font-size: 28px; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; }
-.sub { margin: 0 0 22px; color: var(--sub); font-size: 16px; }
+h1 { margin: 0 0 14px; font-size: 28px; line-height: 1.15; font-weight: 700; letter-spacing: -0.02em; overflow-wrap: anywhere; }
+.dest { display: flex; align-items: center; gap: 12px; margin: 0 0 22px; padding: 10px 12px 10px 14px; border-radius: 14px; background: var(--card); }
+.dest .txt { flex: 1; min-width: 0; }
+.dest .k { display: block; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sub); }
+.dest .v { display: block; font-size: 16px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+button.chg {
+  appearance: none; border: 0; border-radius: 999px; padding: 0 18px; min-height: 44px; font: inherit; font-size: 15px; font-weight: 600;
+  color: var(--blue); background: rgba(10, 132, 255, 0.14); cursor: pointer; flex: none;
+}
+button.chg:active { opacity: 0.6; }
+[hidden] { display: none !important; }
+.sheet { position: fixed; inset: 0; z-index: 10; display: flex; align-items: flex-end; justify-content: center; background: rgba(0, 0, 0, 0.45); }
+.panel {
+  display: flex; flex-direction: column; width: 100%; max-width: 520px; max-height: 88vh; max-height: 88dvh;
+  background: var(--bg); border-radius: 20px 20px 0 0; overflow: hidden;
+}
+.phead { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; padding: 6px 8px; }
+.phead h2 { margin: 0; font-size: 17px; font-weight: 600; text-align: center; }
+button.link {
+  appearance: none; border: 0; background: none; min-height: 44px; padding: 0 10px; font: inherit; font-size: 16px; color: var(--blue); cursor: pointer; justify-self: start;
+}
+button.link:active { opacity: 0.6; }
+.where { margin: 0 16px 8px; font-size: 13px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pbody { flex: 1; min-height: 120px; overflow-y: auto; padding: 0 16px 8px; -webkit-overflow-scrolling: touch; }
+.prows { border-radius: 14px; background: var(--card); overflow: hidden; }
+.prows:empty { display: none; }
+button.prow {
+  appearance: none; border: 0; border-top: 0.5px solid var(--track); display: flex; align-items: center; gap: 10px; width: 100%; min-height: 48px; padding: 8px 14px;
+  background: none; color: var(--text); font: inherit; font-size: 16px; text-align: left; cursor: pointer;
+}
+button.prow:first-child { border-top: 0; }
+button.prow:active { background: var(--track); }
+button.prow .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.prow svg { width: 10px; height: 16px; flex: none; color: var(--sub); }
+button.prow.up { color: var(--blue); }
+button.prow.up svg { color: var(--blue); }
+.pmsg { padding: 18px 4px; text-align: center; font-size: 15px; color: var(--sub); }
+.perr { margin: 8px 4px 0; font-size: 14px; font-weight: 600; color: var(--red); }
+.pfoot { padding: 8px 16px max(16px, env(safe-area-inset-bottom)); }
+button.save {
+  appearance: none; border: 0; width: 100%; min-height: 50px; border-radius: 14px; font: inherit; font-size: 17px; font-weight: 600;
+  color: #fff; background: var(--blue); cursor: pointer;
+}
+button.save:active { opacity: 0.8; }
 .pick {
   position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
   min-height: 176px; padding: 24px 16px; border-radius: 20px; cursor: pointer; text-align: center;
@@ -150,7 +245,10 @@ button.retry:active { opacity: 0.6; }
 <body data-pc="__PC__">
 <main>
   <h1>Send to __PC__</h1>
-  <p class="sub">Files land in Downloads on your PC.</p>
+  <div class="dest">
+    <div class="txt"><span class="k">Save to</span><span class="v" id="destName">Downloads</span></div>
+    <button type="button" class="chg" id="change">Change</button>
+  </div>
   <label class="pick" id="drop">
     <input type="file" id="file" multiple>
     <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M24 33V9M14 19l10-10 10 10"/><path d="M8 29v7a4 4 0 0 0 4 4h24a4 4 0 0 0 4-4v-7"/></svg>
@@ -161,6 +259,22 @@ button.retry:active { opacity: 0.6; }
   <ul id="list"></ul>
   <p class="tip">Tip: Add this page to your Home Screen for one tap next time.</p>
 </main>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+  <div class="panel">
+    <div class="phead">
+      <button type="button" class="link" id="cancel">Cancel</button>
+      <h2 id="sheetTitle">Save to</h2>
+      <span></span>
+    </div>
+    <p class="where" id="where"></p>
+    <div class="pbody">
+      <div class="prows" id="prows"></div>
+      <p class="pmsg" id="pmsg" hidden></p>
+      <p class="perr" id="perr" role="alert" hidden></p>
+    </div>
+    <div class="pfoot"><button type="button" class="save" id="saveHere" hidden>Save here</button></div>
+  </div>
+</div>
 <script>
 (function () {
   var pc = document.body.getAttribute('data-pc');
@@ -168,7 +282,20 @@ button.retry:active { opacity: 0.6; }
   var drop = document.getElementById('drop');
   var list = document.getElementById('list');
   var summary = document.getElementById('summary');
-  var base = location.pathname.replace(/\/$/, '') + '/upload';
+  var root = location.pathname.replace(/\/$/, '');
+  var base = root + '/upload';
+  var destName = document.getElementById('destName');
+  var sheet = document.getElementById('sheet');
+  var prows = document.getElementById('prows');
+  var pmsg = document.getElementById('pmsg');
+  var perr = document.getElementById('perr');
+  var where = document.getElementById('where');
+  var saveHere = document.getElementById('saveHere');
+  var KEY = 'stp-dest';
+  var dest = { root: '', rootName: 'Downloads', path: '' };
+  var picked = false;
+  var nav = null;
+  var navSeq = 0;
   var items = [];
   var running = false;
   var CHECK = '<svg viewBox="0 0 26 26" aria-label="Sent"><circle cx="13" cy="13" r="13" fill="#30d158"/><path d="M7.5 13.5l3.7 3.7 7.3-7.6" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -213,7 +340,7 @@ button.retry:active { opacity: 0.6; }
     }
     if (it.state === 'queued') it.fill.style.width = '0';
     if (it.state === 'done') {
-      it.metaEl.textContent = size + ' · Sent';
+      it.metaEl.textContent = size + ' · Sent to ' + short(it.dest);
       it.stateEl.innerHTML = CHECK;
     }
     if (it.state === 'error') {
@@ -225,6 +352,23 @@ button.retry:active { opacity: 0.6; }
     }
   }
 
+  function short(d) {
+    if (!d.path) return d.rootName;
+    var p = d.path.split('/');
+    return p[p.length - 1];
+  }
+
+  // One shared folder is named; a mixed batch falls back to the PC name.
+  function sentTo() {
+    var seen = {}, names = [];
+    items.forEach(function (it) {
+      if (it.state !== 'done') return;
+      var k = it.dest.root + '|' + it.dest.path;
+      if (!seen[k]) { seen[k] = 1; names.push(short(it.dest)); }
+    });
+    return names.length === 1 ? names[0] : pc;
+  }
+
   function summarize() {
     var done = 0, bad = 0, left = 0;
     items.forEach(function (it) {
@@ -234,7 +378,7 @@ button.retry:active { opacity: 0.6; }
     });
     var text = '';
     if (left) text = 'Sending ' + (done + bad + 1) + ' of ' + items.length + '…';
-    else if (items.length) text = done + ' sent to ' + pc + (bad ? ', ' + bad + ' failed' : '');
+    else if (items.length) text = done + ' sent to ' + sentTo() + (bad ? ', ' + bad + ' failed' : '');
     summary.textContent = text;
     summary.className = left ? '' : (bad ? 'bad' : (done ? 'ok' : ''));
   }
@@ -256,6 +400,8 @@ button.retry:active { opacity: 0.6; }
     var x = new XMLHttpRequest();
     x.open('POST', base);
     x.setRequestHeader('X-Filename', encodeURIComponent(it.file.name || 'file'));
+    if (it.dest.root) x.setRequestHeader('X-Root', it.dest.root);
+    if (it.dest.path) x.setRequestHeader('X-Path', encodeURIComponent(it.dest.path));
     x.setRequestHeader('Content-Type', 'application/octet-stream');
     x.upload.onprogress = function (e) {
       if (e.lengthComputable && it.state === 'sending') paint(it, e.loaded / e.total);
@@ -281,13 +427,201 @@ button.retry:active { opacity: 0.6; }
 
   function add(files) {
     for (var i = 0; i < files.length; i++) {
-      var it = { file: files[i], state: 'queued' };
+      var it = { file: files[i], state: 'queued', dest: { root: dest.root, rootName: dest.rootName, path: dest.path } };
       build(it);
       paint(it);
       items.push(it);
     }
     summarize();
     pump();
+  }
+
+  function label(rootName, path) {
+    var parts = [rootName].concat(path ? path.split('/') : []);
+    if (parts.length > 3) parts = [parts[0], '…', parts[parts.length - 2], parts[parts.length - 1]];
+    return parts.join(' › ');
+  }
+
+  function paintDest() {
+    destName.textContent = label(dest.rootName, dest.path);
+    destName.title = [dest.rootName].concat(dest.path ? dest.path.split('/') : []).join(' › ');
+  }
+
+  function store(v) {
+    try {
+      if (v) localStorage.setItem(KEY, JSON.stringify({ root: v.root, path: v.path }));
+      else localStorage.removeItem(KEY);
+    } catch (e) {}
+  }
+
+  function recall() {
+    try {
+      var v = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (v && typeof v.root === 'string' && v.root && typeof v.path === 'string') return v;
+    } catch (e) {}
+    return null;
+  }
+
+  function query(rootId, path, cb) {
+    var x = new XMLHttpRequest();
+    var q = rootId ? '?root=' + encodeURIComponent(rootId) + '&path=' + encodeURIComponent(path || '') : '';
+    x.open('GET', root + '/folders' + q);
+    x.onload = function () {
+      var r = null;
+      try { r = JSON.parse(x.responseText); } catch (e) {}
+      if (x.status === 200 && r) cb(null, r);
+      else cb((r && r.message) || 'Could not load folders (HTTP ' + x.status + ')');
+    };
+    x.onerror = function () { cb('Connection lost'); };
+    x.ontimeout = x.onerror;
+    x.send();
+  }
+
+  function chevron(flip) {
+    var s = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    s.setAttribute('viewBox', '0 0 10 16');
+    s.setAttribute('aria-hidden', 'true');
+    var p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    p.setAttribute('d', flip ? 'M8 1L2 8l6 7' : 'M2 1l6 7-6 7');
+    p.setAttribute('fill', 'none');
+    p.setAttribute('stroke', 'currentColor');
+    p.setAttribute('stroke-width', '2');
+    p.setAttribute('stroke-linecap', 'round');
+    p.setAttribute('stroke-linejoin', 'round');
+    s.appendChild(p);
+    return s;
+  }
+
+  function rowBtn(text, cls, flip, onTap) {
+    var b = el('button', 'prow' + (cls ? ' ' + cls : ''));
+    b.type = 'button';
+    if (flip) b.appendChild(chevron(true));
+    b.appendChild(el('span', 'nm', text));
+    if (!flip) b.appendChild(chevron(false));
+    b.onclick = onTap;
+    return b;
+  }
+
+  function showMsg(text) {
+    pmsg.textContent = text || '';
+    pmsg.hidden = !text;
+  }
+
+  function showErr(text) {
+    perr.textContent = text || '';
+    perr.hidden = !text;
+  }
+
+  function render() {
+    prows.textContent = '';
+    showMsg('');
+    if (!nav.root) {
+      where.textContent = 'Choose a location';
+      saveHere.hidden = true;
+      nav.roots.forEach(function (r) {
+        prows.appendChild(rowBtn(r.name, '', false, function () { browse(r.id, ''); }));
+      });
+      if (!nav.roots.length) showMsg('No folders available.');
+      return;
+    }
+    saveHere.hidden = false;
+    where.textContent = label(nav.rootName, nav.path);
+    var segs = nav.path ? nav.path.split('/') : [];
+    var parentName = segs.length > 1 ? segs[segs.length - 2] : (segs.length ? nav.rootName : 'All locations');
+    prows.appendChild(rowBtn(parentName, 'up', true, function () {
+      if (!segs.length) return browseRoots();
+      browse(nav.root, segs.slice(0, -1).join('/'));
+    }));
+    nav.folders.forEach(function (name) {
+      prows.appendChild(rowBtn(name, '', false, function () { browse(nav.root, segs.concat(name).join('/')); }));
+    });
+    if (!nav.folders.length) showMsg('No folders in here.');
+  }
+
+  function loading() {
+    showErr('');
+    showMsg('Loading…');
+  }
+
+  function browseRoots() {
+    var seq = ++navSeq;
+    loading();
+    query('', '', function (err, r) {
+      if (seq !== navSeq) return;
+      if (err) { showMsg(''); showErr(err); return; }
+      nav = { root: '', roots: r.roots || [] };
+      render();
+    });
+  }
+
+  function browse(rootId, path, fallbackToTop) {
+    var seq = ++navSeq;
+    loading();
+    query(rootId, path, function (err, r) {
+      if (seq !== navSeq) return;
+      if (err) {
+        if (fallbackToTop) return browseRoots();
+        showMsg('');
+        showErr(err);
+        if (nav) render();
+        return;
+      }
+      nav = { root: r.root, rootName: r.rootName, path: r.path || '', folders: r.folders || [] };
+      render();
+    });
+  }
+
+  function openSheet() {
+    sheet.hidden = false;
+    document.body.style.overflow = 'hidden';
+    nav = null;
+    prows.textContent = '';
+    saveHere.hidden = true;
+    where.textContent = '';
+    if (dest.root) browse(dest.root, dest.path, true);
+    else browseRoots();
+  }
+
+  function closeSheet() {
+    navSeq++;
+    sheet.hidden = true;
+    document.body.style.overflow = '';
+    document.getElementById('change').focus();
+  }
+
+  document.getElementById('change').addEventListener('click', openSheet);
+  document.getElementById('cancel').addEventListener('click', closeSheet);
+  sheet.addEventListener('click', function (e) { if (e.target === sheet) closeSheet(); });
+  window.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !sheet.hidden) closeSheet(); });
+  saveHere.addEventListener('click', function () {
+    if (!nav || !nav.root) return;
+    dest = { root: nav.root, rootName: nav.rootName, path: nav.path };
+    picked = true;
+    store(dest);
+    paintDest();
+    closeSheet();
+  });
+
+  // Reuse the last pick only if the PC still has that folder; otherwise quietly use the default.
+  function initDest() {
+    function useDefault() {
+      query('', '', function (err, r) {
+        if (err || !r.roots || !r.roots.length || picked) return;
+        dest = { root: '', rootName: r.roots[0].name, path: '' };
+        paintDest();
+      });
+    }
+    var saved = recall();
+    if (!saved) return useDefault();
+    query(saved.root, saved.path, function (err, r) {
+      if (err || !r.root) {
+        store(null);
+        return useDefault();
+      }
+      if (picked) return;
+      dest = { root: r.root, rootName: r.rootName, path: r.path || '' };
+      paintDest();
+    });
   }
 
   input.addEventListener('change', function () {
@@ -309,6 +643,8 @@ button.retry:active { opacity: 0.6; }
     var files = e.dataTransfer && e.dataTransfer.files;
     if (files && files.length) add(Array.prototype.slice.call(files));
   });
+
+  initDest();
 
   window.addEventListener('beforeunload', function (e) {
     var busy = items.some(function (it) { return it.state === 'sending' || it.state === 'queued'; });
@@ -349,11 +685,15 @@ async function listen(server, port) {
   }
 }
 
-async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', onReceived, onProgress } = {}) {
+async function startDropServer({ port = 47800, token, dir, roots, pcName = 'your PC', onReceived, onProgress } = {}) {
   if (!token) throw new Error('A token is required.');
   const tokenBuf = Buffer.from(String(token));
   const page = renderPage(pcName);
   const getDir = typeof dir === 'function' ? dir : () => dir;
+  // Looked up per request so the list follows OneDrive being set up or removed.
+  const getRoots = typeof roots === 'function' ? roots
+    : Array.isArray(roots) ? () => roots
+    : () => [{ id: 'downloads', name: 'Downloads', path: getDir() }];
   const bad = new Map(); // ip -> { count, start }, oldest window first
   const sockets = new Set();
 
@@ -396,6 +736,21 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
   const text = (res, status, body) => reply(res, status, 'text/plain; charset=utf-8', body);
   const json = (res, status, obj) => reply(res, status, 'application/json; charset=utf-8', JSON.stringify(obj));
 
+  // Answer first, then drain, so the phone sees the JSON instead of a reset connection.
+  const fail = (req, res, err) => {
+    const known = err && err.status;
+    json(res, known || 500, { ok: false, message: known ? err.message : friendlyError(err) });
+    req.resume();
+  };
+
+  const decodeRel = (v) => {
+    try {
+      return decodeURIComponent(v || '');
+    } catch {
+      throw folderError(400, 'That folder name is not allowed.');
+    }
+  };
+
   async function receive(req, res) {
     let name = 'file';
     try {
@@ -404,7 +759,8 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
     const total = parseInt(req.headers['content-length'], 10) || 0;
     let last = 0;
     try {
-      const saved = await saveStream(getDir(), name, req, (received) => {
+      const target = resolveFolder(getRoots(), String(req.headers['x-root'] || ''), decodeRel(req.headers['x-path']));
+      const saved = await saveStream(target.dir, name, req, (received) => {
         if (!onProgress) return;
         const now = Date.now();
         if (now - last < PROGRESS_MS) return;
@@ -412,9 +768,30 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
         try { onProgress({ name, received, total }); } catch {}
       });
       try { onReceived?.(saved); } catch {}
-      json(res, 200, { ok: true, name: saved.name });
+      json(res, 200, { ok: true, name: saved.name, folder: target.root.name + (target.rel ? '/' + target.rel : '') });
     } catch (err) {
-      json(res, 500, { ok: false, message: friendlyError(err) });
+      fail(req, res, err);
+    }
+  }
+
+  // Lists what the phone may pick from. Only ids and display names go out, never PC paths.
+  async function folders(req, res, query) {
+    try {
+      const list = getRoots();
+      const id = query.get('root');
+      if (!id) return json(res, 200, { roots: list.filter((r) => isDir(r.path)).map((r) => ({ id: r.id, name: r.name })) });
+      const target = resolveFolder(list, id, query.get('path'));
+      let names;
+      try {
+        names = await listFolders(target.dir);
+      } catch (err) {
+        if (err.code === 'ENOENT' || err.code === 'ENOTDIR') throw folderError(404, 'That folder no longer exists on the PC.');
+        throw folderError(500, 'Could not read that folder.');
+      }
+      json(res, 200, { root: target.root.id, rootName: target.root.name, path: target.rel, folders: names });
+    } catch (err) {
+      const known = err && err.status;
+      json(res, known || 500, { ok: false, message: known ? err.message : 'Could not read that folder.' });
     }
   }
 
@@ -430,7 +807,7 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
     const now = Date.now();
     if (isLimited(ip, now)) return text(res, 429, 'Too many requests');
 
-    const pathname = (req.url || '').split('?')[0];
+    const [pathname, queryString = ''] = (req.url || '').split('?');
     const m = /^\/([^/]+)(\/.*)?$/.exec(pathname);
     if (!m || !tokenMatches(m[1])) {
       // Browsers ask for this on their own; it is not a guess at the token.
@@ -444,6 +821,7 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
       return reply(res, 200, 'text/html; charset=utf-8', req.method === 'HEAD' ? undefined : page);
     }
     if (req.method === 'POST' && rest === '/upload') return void receive(req, res);
+    if (req.method === 'GET' && rest === '/folders') return void folders(req, res, new URLSearchParams(queryString));
     text(res, 404, 'Not found');
   });
 
@@ -471,4 +849,4 @@ async function startDropServer({ port = 47800, token, dir, pcName = 'your PC', o
   };
 }
 
-module.exports = { startDropServer, lanAddresses, isPrivateAddress, renderPage };
+module.exports = { startDropServer, lanAddresses, isPrivateAddress, renderPage, resolveFolder };

@@ -4,7 +4,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
-const { startDropServer, lanAddresses, isPrivateAddress } = require('../src/dropserver');
+const { startDropServer, lanAddresses, isPrivateAddress, resolveFolder } = require('../src/dropserver');
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'stp-drop-'));
 const TOKEN = 'k7m2x9qa';
@@ -63,6 +63,57 @@ const startServer = (extra = {}) =>
     ...extra,
   });
 
+// Drop-page destinations: a Downloads-like root, a OneDrive-like root, and a folder outside both.
+const layout = () => {
+  const base = fresh();
+  const mk = (...p) => fs.mkdirSync(path.join(base, ...p), { recursive: true });
+  mk('dl');
+  mk('od', 'ME 211', 'Labs');
+  mk('od', 'ME 2', 'x');
+  mk('od', 'me 10');
+  mk('od', 'Alpha');
+  mk('od', '.hidden');
+  mk('od', '~$lock');
+  mk('outside', 'sub');
+  fs.writeFileSync(path.join(base, 'od', 'notes.txt'), 'file');
+  const roots = [
+    { id: 'downloads', name: 'Downloads', path: path.join(base, 'dl') },
+    { id: 'onedrive', name: 'OneDrive', path: path.join(base, 'od') },
+    { id: 'ghost', name: 'Ghost', path: path.join(base, 'missing-root') },
+  ];
+  return { base, roots, dl: roots[0].path, od: roots[1].path, outside: path.join(base, 'outside') };
+};
+
+const tryJunction = (target, link) => {
+  try {
+    fs.symlinkSync(target, link, 'junction');
+    return true;
+  } catch (e) {
+    if (e.code === 'EPERM' || e.code === 'EACCES' || e.code === 'UNKNOWN') return false;
+    throw e;
+  }
+};
+
+const folders = (port, query = '') => request(port, { url: `/${TOKEN}/folders${query}` });
+const uploadTo = (port, { root, rel, name = 'a.txt', body = 'hello' } = {}) => {
+  const headers = { 'X-Filename': encodeURIComponent(name), 'Content-Length': Buffer.byteLength(body) };
+  if (root !== undefined) headers['X-Root'] = root;
+  if (rel !== undefined) headers['X-Path'] = rel;
+  return request(port, { method: 'POST', url: `/${TOKEN}/upload`, headers, body });
+};
+const snapshot = (dir) => {
+  const out = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      out.push(f);
+      if (e.isDirectory() && !e.isSymbolicLink()) walk(f);
+    }
+  };
+  walk(dir);
+  return out.sort();
+};
+
 const tests = {
   async 'page: served at /token and /token/ with CSP and security headers'() {
     for (const url of [`/${TOKEN}`, `/${TOKEN}/`]) {
@@ -77,7 +128,8 @@ const tests = {
       assert.strictEqual(r.headers['cache-control'], 'no-store');
       assert.strictEqual(r.headers['x-content-type-options'], 'nosniff');
       assert.match(r.body, /Send to MICHAEL-PC/);
-      assert.match(r.body, /Files land in Downloads on your PC\./);
+      assert.match(r.body, /Save to/);
+      assert.match(r.body, /id="change"/);
       assert.match(r.body, /Choose photos or files/);
       assert.ok(!/<input[^>]*accept=/.test(r.body), 'file input must not have accept');
     }
@@ -119,7 +171,7 @@ const tests = {
     received.length = 0;
     const r = await upload('Holiday photo #1.jpg', bytes);
     assert.strictEqual(r.status, 200);
-    assert.deepStrictEqual(JSON.parse(r.body), { ok: true, name: 'Holiday photo #1.jpg' });
+    assert.deepStrictEqual(JSON.parse(r.body), { ok: true, name: 'Holiday photo #1.jpg', folder: 'Downloads' });
     assert.ok(fs.readFileSync(path.join(dir, 'Holiday photo #1.jpg')).equals(bytes));
     assert.strictEqual(received.length, 1);
     assert.strictEqual(received[0].name, 'Holiday photo #1.jpg');
@@ -211,6 +263,317 @@ const tests = {
     assert.strictEqual((await request(srv.port, { url: `/${TOKEN}` })).status, 200);
     assert.strictEqual(JSON.parse((await upload('after.txt', 'ok')).body).ok, true);
     assert.deepStrictEqual(fs.readdirSync(dir), ['after.txt']);
+  },
+
+  async 'folders: no root lists ids and names only, skipping roots that are missing'() {
+    const L = layout();
+    const s = await startServer({ roots: L.roots });
+    try {
+      const r = await folders(s.port);
+      assert.strictEqual(r.status, 200);
+      assert.match(r.headers['content-type'], /application\/json/);
+      assert.deepStrictEqual(JSON.parse(r.body), { roots: [{ id: 'downloads', name: 'Downloads' }, { id: 'onedrive', name: 'OneDrive' }] });
+      assert.ok(!r.body.includes(L.base) && !r.body.includes('stp-drop-'), 'no absolute paths');
+      const q = await folders(s.port, '?root=onedrive');
+      assert.ok(!q.body.includes(L.base) && !q.body.includes('stp-drop-'), 'no absolute paths');
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'folders: roots may be a function evaluated per request'() {
+    const L = layout();
+    let list = [L.roots[0]];
+    const s = await startServer({ roots: () => list });
+    try {
+      assert.deepStrictEqual(JSON.parse((await folders(s.port)).body).roots.map((x) => x.id), ['downloads']);
+      list = L.roots;
+      assert.deepStrictEqual(JSON.parse((await folders(s.port)).body).roots.map((x) => x.id), ['downloads', 'onedrive']);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'folders: lists sorted subfolders, no dot folders, files, lock files or junctions'() {
+    const L = layout();
+    const linked = tryJunction(L.outside, path.join(L.od, 'Sneaky'));
+    const s = await startServer({ roots: L.roots });
+    try {
+      const r = await folders(s.port, '?root=onedrive');
+      assert.strictEqual(r.status, 200);
+      const j = JSON.parse(r.body);
+      assert.strictEqual(j.root, 'onedrive');
+      assert.strictEqual(j.rootName, 'OneDrive');
+      assert.strictEqual(j.path, '');
+      assert.deepStrictEqual(j.folders, ['Alpha', 'ME 2', 'me 10', 'ME 211']);
+      if (!linked) console.log('     (junction creation not permitted here, skipped that assertion)');
+      const sub = JSON.parse((await folders(s.port, `?root=onedrive&path=${encodeURIComponent('ME 211')}`)).body);
+      assert.strictEqual(sub.path, 'ME 211');
+      assert.deepStrictEqual(sub.folders, ['Labs']);
+      const nested = JSON.parse((await folders(s.port, `?root=onedrive&path=${encodeURIComponent('ME 211//Labs/')}`)).body);
+      assert.strictEqual(nested.path, 'ME 211/Labs');
+      assert.deepStrictEqual(nested.folders, []);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'folders: capped at 1000 entries'() {
+    const L = layout();
+    for (let i = 0; i < 1005; i++) fs.mkdirSync(path.join(L.dl, `d${String(i).padStart(4, '0')}`));
+    const s = await startServer({ roots: L.roots });
+    try {
+      const j = JSON.parse((await folders(s.port, '?root=downloads')).body);
+      assert.strictEqual(j.folders.length, 1000);
+      assert.strictEqual(j.folders[0], 'd0000');
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'folders: bad root 400, bad path 400, missing folder 404, all JSON'() {
+    const L = layout();
+    const s = await startServer({ roots: L.roots });
+    try {
+      for (const [q, status] of [
+        ['?root=nope', 400],
+        ['?root=onedrive&path=..', 400],
+        ['?root=onedrive&path=ME%20211/..%2f..', 400],
+        [`?root=onedrive&path=${encodeURIComponent('C:\\Windows')}`, 400],
+        ['?root=onedrive&path=Nothing', 404],
+        ['?root=ghost', 404],
+      ]) {
+        const r = await folders(s.port, q);
+        assert.strictEqual(r.status, status, q);
+        const j = JSON.parse(r.body);
+        assert.strictEqual(j.ok, false, q);
+        assert.ok(j.message && !j.message.includes(L.base), q);
+      }
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'folders: token is still required (404 text, counted as a bad guess)'() {
+    const L = layout();
+    const s = await startServer({ roots: L.roots });
+    try {
+      for (const url of ['/folders', '/folders?root=onedrive', `/${TOKEN}x/folders`, '/wrong/folders?root=onedrive']) {
+        const r = await request(s.port, { url });
+        assert.strictEqual(r.status, 404, url);
+        assert.match(r.headers['content-type'], /text\/plain/);
+        assert.strictEqual(r.body, 'Not found');
+      }
+      assert.strictEqual((await request(s.port, { method: 'POST', url: `/${TOKEN}/folders` })).status, 404);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: X-Root and X-Path land in a nested existing folder'() {
+    const L = layout();
+    received.length = 0;
+    const s = await startServer({ roots: L.roots });
+    try {
+      const rel = 'ME 211/Labs';
+      const r = await uploadTo(s.port, { root: 'onedrive', rel: encodeURIComponent(rel), name: 'lab1.txt', body: 'data' });
+      assert.strictEqual(r.status, 200);
+      assert.deepStrictEqual(JSON.parse(r.body), { ok: true, name: 'lab1.txt', folder: 'OneDrive/ME 211/Labs' });
+      assert.strictEqual(fs.readFileSync(path.join(L.od, 'ME 211', 'Labs', 'lab1.txt'), 'utf8'), 'data');
+      assert.strictEqual(received[0].path, path.join(L.od, 'ME 211', 'Labs', 'lab1.txt'));
+      assert.deepStrictEqual(fs.readdirSync(path.join(L.od, 'ME 211', 'Labs')), ['lab1.txt']);
+      assert.deepStrictEqual(fs.readdirSync(L.dl), []);
+      const top = await uploadTo(s.port, { root: 'onedrive', name: 'top.txt' });
+      assert.deepStrictEqual(JSON.parse(top.body), { ok: true, name: 'top.txt', folder: 'OneDrive' });
+      assert.ok(fs.existsSync(path.join(L.od, 'top.txt')));
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: no headers goes to the first root, the default'() {
+    const L = layout();
+    const s = await startServer({ roots: L.roots });
+    try {
+      const r = await uploadTo(s.port, { name: 'plain.txt' });
+      assert.deepStrictEqual(JSON.parse(r.body), { ok: true, name: 'plain.txt', folder: 'Downloads' });
+      assert.deepStrictEqual(fs.readdirSync(L.dl), ['plain.txt']);
+      const blank = await uploadTo(s.port, { root: '', rel: '', name: 'blank.txt' });
+      assert.strictEqual(JSON.parse(blank.body).folder, 'Downloads');
+      assert.deepStrictEqual(fs.readdirSync(L.dl).sort(), ['blank.txt', 'plain.txt']);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: default root is still created on demand when it has no path'() {
+    const base = fresh();
+    const dl = path.join(base, 'not', 'yet');
+    const s = await startServer({ roots: [{ id: 'downloads', name: 'Downloads', path: dl }] });
+    try {
+      assert.strictEqual(JSON.parse((await uploadTo(s.port, { name: 'x.txt' })).body).ok, true);
+      assert.deepStrictEqual(fs.readdirSync(dl), ['x.txt']);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: traversal in X-Path is rejected with 400 and nothing is written anywhere'() {
+    const L = layout();
+    const before = snapshot(L.base);
+    const s = await startServer({ roots: L.roots });
+    try {
+      const bad = [
+        encodeURIComponent('..'),
+        encodeURIComponent('a/../..'),
+        encodeURIComponent('ME 211/../../outside'),
+        encodeURIComponent('C:\\Windows'),
+        encodeURIComponent('C:/Windows'),
+        encodeURIComponent('\\\\server\\share'),
+        encodeURIComponent('ME 211\\Labs'),
+        encodeURIComponent('/outside'),
+        encodeURIComponent('.'),
+        encodeURIComponent('ME 211/./Labs'),
+        encodeURIComponent('bad:name'),
+        '%2e%2e',
+        '%2E%2E%2Foutside',
+        '%00',
+        '%E0%A4%A',
+      ];
+      for (const rel of bad) {
+        for (const root of ['onedrive', 'downloads']) {
+          const r = await uploadTo(s.port, { root, rel, name: 'evil.txt' });
+          assert.strictEqual(r.status, 400, `${root} ${rel}`);
+          const j = JSON.parse(r.body);
+          assert.strictEqual(j.ok, false);
+          assert.ok(!j.message.includes(L.base));
+        }
+      }
+      assert.deepStrictEqual(snapshot(L.base), before);
+      assert.strictEqual((await uploadTo(s.port, { root: 'onedrive', name: 'fine.txt' })).status, 200);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: a junction pointing outside the root cannot be used to escape'() {
+    const L = layout();
+    if (!tryJunction(L.outside, path.join(L.od, 'Escape'))) {
+      console.log('     (junction creation not permitted here, skipped)');
+      return;
+    }
+    const before = snapshot(L.outside);
+    const s = await startServer({ roots: L.roots });
+    try {
+      for (const rel of ['Escape', 'Escape/sub']) {
+        const r = await uploadTo(s.port, { root: 'onedrive', rel: encodeURIComponent(rel), name: 'evil.txt' });
+        assert.strictEqual(r.status, 400, rel);
+        assert.strictEqual(JSON.parse(r.body).ok, false);
+        const f = await folders(s.port, `?root=onedrive&path=${encodeURIComponent(rel)}`);
+        assert.strictEqual(f.status, 400, rel);
+      }
+      assert.deepStrictEqual(snapshot(L.outside), before);
+      assert.ok(!fs.existsSync(path.join(L.outside, 'evil.txt')));
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: a root that is itself a junction still works for folders inside it'() {
+    const L = layout();
+    const link = path.join(L.base, 'od-link');
+    if (!tryJunction(L.od, link)) {
+      console.log('     (junction creation not permitted here, skipped)');
+      return;
+    }
+    const s = await startServer({ roots: [{ id: 'onedrive', name: 'OneDrive', path: link }] });
+    try {
+      const r = await uploadTo(s.port, { root: 'onedrive', rel: encodeURIComponent('ME 211/Labs'), name: 'ok.txt' });
+      assert.strictEqual(r.status, 200);
+      assert.ok(fs.existsSync(path.join(L.od, 'ME 211', 'Labs', 'ok.txt')));
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: unknown root is 400, missing folder is 404 and is never created'() {
+    const L = layout();
+    const before = snapshot(L.base);
+    const s = await startServer({ roots: L.roots });
+    try {
+      const unknown = await uploadTo(s.port, { root: 'nope', name: 'u.txt' });
+      assert.strictEqual(unknown.status, 400);
+      assert.strictEqual(JSON.parse(unknown.body).ok, false);
+      for (const [root, rel] of [['onedrive', 'Gone'], ['onedrive', 'ME 211/Gone/Deeper'], ['downloads', 'Gone'], ['ghost', '']]) {
+        const r = await uploadTo(s.port, { root, rel: encodeURIComponent(rel), name: 'm.txt' });
+        assert.strictEqual(r.status, 404, `${root}/${rel}`);
+        const j = JSON.parse(r.body);
+        assert.strictEqual(j.ok, false);
+        assert.strictEqual(j.message, 'That folder no longer exists on the PC.');
+      }
+      assert.deepStrictEqual(snapshot(L.base), before);
+      assert.ok(!fs.existsSync(L.roots[2].path));
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'upload: a file where a folder is expected is 404, and a large rejected body still gets a JSON reply'() {
+    const L = layout();
+    const s = await startServer({ roots: L.roots });
+    try {
+      const r = await uploadTo(s.port, { root: 'onedrive', rel: encodeURIComponent('notes.txt'), name: 'x.txt' });
+      assert.strictEqual(r.status, 404);
+      // Browsers keep the connection alive, so the early reply must survive a body still in flight.
+      const agent = new http.Agent({ keepAlive: true });
+      const body = Buffer.alloc(3000000);
+      const big = await new Promise((resolve, reject) => {
+        const req = http.request({
+          host: '127.0.0.1', port: s.port, method: 'POST', path: `/${TOKEN}/upload`, agent,
+          headers: { 'X-Filename': 'big.bin', 'X-Root': 'onedrive', 'X-Path': 'Gone', 'Content-Length': body.length },
+        }, (res) => {
+          const chunks = [];
+          res.on('data', (c) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+        });
+        req.on('error', reject);
+        req.end(body);
+      });
+      agent.destroy();
+      assert.strictEqual(big.status, 404);
+      assert.strictEqual(JSON.parse(big.body).ok, false);
+      assert.strictEqual(snapshot(L.od).filter((f) => f.endsWith('.part') || f.endsWith('big.bin')).length, 0);
+    } finally {
+      await s.close();
+    }
+  },
+
+  async 'resolveFolder: accepts normal nested names, rejects the rest'() {
+    const L = layout();
+    const ok = resolveFolder(L.roots, 'onedrive', 'ME 211/Labs');
+    assert.strictEqual(ok.rel, 'ME 211/Labs');
+    assert.strictEqual(ok.dir, path.join(L.od, 'ME 211', 'Labs'));
+    assert.strictEqual(resolveFolder(L.roots, '', '').root.id, 'downloads');
+    assert.strictEqual(resolveFolder(L.roots, 'onedrive', 'ME 211//Labs/').rel, 'ME 211/Labs');
+    for (const rel of ['..', '../x', 'a/..', '.', 'C:', 'a\\b', '/abs', 'a/b:c', 'a/b?', 'con', 'trail.', 'a\u0001b']) {
+      assert.throws(() => resolveFolder(L.roots, 'onedrive', rel), (e) => e.status === 400, JSON.stringify(rel));
+    }
+    assert.throws(() => resolveFolder(L.roots, 'x', ''), (e) => e.status === 400);
+    assert.throws(() => resolveFolder([], '', ''), (e) => e.status === 400);
+    assert.throws(() => resolveFolder(L.roots, 'onedrive', 'Nope'), (e) => e.status === 404);
+  },
+
+  async 'page: has the Save to picker, builds DOM with textContent, and its script parses'() {
+    const { renderPage } = require('../src/dropserver');
+    const html = renderPage('PC');
+    assert.match(html, /id="destName"/);
+    assert.match(html, /id="sheet"/);
+    assert.match(html, /X-Root/);
+    assert.match(html, /localStorage/);
+    const script = html.split('<script>')[1].split('</script>')[0];
+    new Function(script);
+    const uses = script.match(/innerHTML/g) || [];
+    assert.strictEqual(uses.length, 1, 'only the constant check mark may use innerHTML');
   },
 
   async 'rate limit: 429 for everything after 20 bad requests, even the right token'() {

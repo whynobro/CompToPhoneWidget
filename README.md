@@ -61,7 +61,7 @@ flowchart LR
 
 ## 📥 Phone to PC
 
-Right-click the widget → **Receive from phone…** Files land straight in your **Downloads** folder and a toast tells you (click it to show the file).
+Right-click the widget → **Receive from phone…** Files land in your **Downloads** folder by default and a toast tells you (click it to show the file). On the phone's drop page, **Save to** lets you pick Downloads or any folder inside your OneDrive, and it remembers your pick.
 
 <p align="center"><img src="docs/media/receive.jpg" alt="The phone's drop page uploading three files while the PC widget shows Received and a toast lists the files" width="100%"></p>
 
