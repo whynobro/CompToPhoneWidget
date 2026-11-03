@@ -671,7 +671,7 @@ button.send:disabled { opacity: 0.4; cursor: default; }
     if (files && files.length) add(Array.prototype.slice.call(files));
   });
 
-  // Quick message: a link opens from the PC's toast, anything else lands on the PC clipboard.
+  // Quick message: lands on the PC clipboard; a link also opens from the PC's toast.
   var msgForm = document.getElementById('msgForm');
   var msg = document.getElementById('msg');
   var msgSend = document.getElementById('msgSend');
@@ -703,7 +703,7 @@ button.send:disabled { opacity: 0.4; cursor: default; }
       msgBusy = false;
       if (x.status === 200 && r && r.ok) {
         if (msg.value.trim() === text) msg.value = '';
-        msgState(link ? 'Link sent. Click the toast on ' + pc + ' to open it.' : 'Copied to the clipboard on ' + pc + '.', 'ok');
+        msgState(link ? 'Link copied on ' + pc + '. Click its toast to open it.' : 'Copied to the clipboard on ' + pc + '.', 'ok');
       } else {
         msgState((r && r.message) || 'Failed (HTTP ' + x.status + ')', 'bad');
       }

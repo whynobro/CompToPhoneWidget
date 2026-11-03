@@ -67,7 +67,7 @@ Right-click the widget → **Receive from phone…** Files land in your **Downlo
 
 | Way | Phone needs | Limit | How |
 |---|---|---|---|
-| **Wi-Fi drop page** | Just the camera and a browser | Any size | Scan the QR code, tap **Choose photos or files**, or type or paste into **Or send a message** (a link opens from the toast, anything else lands on the PC clipboard). Phone and PC on the same network. Add the page to your Home Screen for one tap next time. |
+| **Wi-Fi drop page** | Just the camera and a browser | Any size | Scan the QR code, tap **Choose photos or files**, or type or paste into **Or send a message** (it lands on the PC clipboard, and a link also opens when you click the toast). Phone and PC on the same network. Add the page to your Home Screen for one tap next time. |
 | **ntfy inbox** | Android: ntfy app. iPhone: any browser | 15 MB per file | Works from anywhere. Android: Share → **ntfy** → enter the inbox topic shown in the window. Elsewhere: open `ntfy.sh/<inbox topic>` and attach with the paperclip. Text and links you share land on the PC clipboard. |
 
 The first time, Windows asks whether Send to Phone may use the network: allow **Private networks**, or the phone can't reach the page. Campus, hotel and other public Wi-Fi often stop devices from seeing each other: use the ntfy inbox there, or [Tailscale](https://tailscale.com) (its `100.x` address, listed in the window, works from anywhere). The page only answers on its secret link, only to local-network addresses, and **New link** in the window locks out anyone who has the old one. Received files carry the same "downloaded from the internet" mark as browser downloads, so SmartScreen still checks anything runnable.

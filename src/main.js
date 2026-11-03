@@ -401,8 +401,20 @@ function createTray() {
 }
 
 // ---------- sending ----------
+// Windows only delivers a toast's click while its Notification object is alive, including
+// clicks from Notification Center later, so the most recent ones are held here.
+const liveToasts = [];
+function toast(opts, onClick) {
+  if (!Notification.isSupported()) return;
+  const n = new Notification({ icon: ICON, silent: true, ...opts });
+  if (onClick) n.on('click', onClick);
+  liveToasts.push(n);
+  if (liveToasts.length > 20) liveToasts.shift();
+  n.show();
+}
+
 function notify(title, body) {
-  if (Notification.isSupported()) new Notification({ title, body, icon: ICON, silent: true }).show();
+  toast({ title, body });
 }
 
 async function doSend(paths) {
@@ -540,28 +552,24 @@ function received(f) {
   clearTimeout(arrivedTimer);
   arrivedTimer = setTimeout(() => {
     const files = arrived.splice(0);
-    if (!Notification.isSupported()) return;
-    const n = new Notification({
+    toast({
       title: files.length === 1 ? 'From your phone' : `${files.length} files from your phone`,
       body: files.length === 1 ? `${files[0].name} is in ${path.basename(path.dirname(files[0].path))}` : files.map((x) => x.name).join(', '),
-      icon: ICON,
-      silent: true,
-    });
-    n.on('click', () => (files.length === 1 ? shell.showItemInFolder(files[0].path) : shell.openPath(path.dirname(files[0].path))));
-    n.show();
+    }, () => (files.length === 1 ? shell.showItemInFolder(files[0].path) : shell.openPath(path.dirname(files[0].path))));
   }, 1500);
 }
 
-// Text from the inbox or the drop page: links open on click, anything else goes on the clipboard.
+// Text from the inbox or the drop page always lands on the clipboard, so a missed toast loses
+// nothing; a link also opens when the toast is clicked.
 function receivedText({ title, message, click }) {
   const text = String(message || '').trim();
   const url = [click, text].find((u) => /^https?:\/\/\S+$/i.test(u || ''));
-  if (!url) clipboard.writeText(text);
+  clipboard.writeText(url && text === url ? url : text);
   widget?.webContents.send('received', url ? 'Link' : 'Note');
-  if (!Notification.isSupported()) return;
-  const n = new Notification({ title: title || (url ? 'Link from your phone' : 'Copied from your phone'), body: text, icon: ICON, silent: true });
-  if (url) n.on('click', () => shell.openExternal(url));
-  n.show();
+  toast({
+    title: title || (url ? 'Link from your phone (copied)' : 'Copied from your phone'),
+    body: url ? `${text}\nClick to open, or paste it anywhere.` : text,
+  }, url ? () => shell.openExternal(url) : undefined);
 }
 
 async function startReceiving() {
