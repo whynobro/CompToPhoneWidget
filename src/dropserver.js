@@ -1,5 +1,6 @@
 // Phone -> PC: a tiny LAN HTTP server. The phone opens a page served from here and streams
-// files straight into Downloads or a folder it picks. Plain Node (no Electron) so it can be tested directly.
+// files straight into Downloads or a folder it picks, or sends a quick message (a link or a note).
+// Plain Node (no Electron) so it can be tested directly.
 const http = require('http');
 const net = require('net');
 const os = require('os');
@@ -13,6 +14,7 @@ const MAX_BAD = 20;
 const MAX_TRACKED = 1000;
 const PROGRESS_MS = 250;
 const MAX_FOLDERS = 1000;
+const MAX_TEXT = 100 * 1024; // bytes of UTF-8 a message may carry
 
 // Adapters that never carry a phone's traffic (VMs, WSL, tethering stubs, capture drivers).
 const VIRTUAL = /vethernet|wsl|hyper-v|virtualbox|vmware|loopback|bluetooth|npcap/i;
@@ -238,6 +240,23 @@ button.retry {
   color: var(--blue); background: rgba(10, 132, 255, 0.14); cursor: pointer;
 }
 button.retry:active { opacity: 0.6; }
+.msg { margin: 22px 0 0; padding: 14px; border-radius: 20px; background: var(--card); }
+.msg label { display: block; margin: 0 2px 8px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--sub); }
+.msg textarea {
+  display: block; width: 100%; min-height: 84px; max-height: 40vh; resize: vertical; margin: 0; padding: 10px 12px; border: 0; border-radius: 12px;
+  background: var(--track); color: var(--text); font: inherit; font-size: 16px; line-height: 1.35; overflow-wrap: anywhere;
+}
+.msg textarea:focus { outline: 2px solid var(--blue); outline-offset: 0; }
+.msg .go { display: flex; align-items: center; gap: 12px; margin-top: 10px; }
+.msg .go p { flex: 1; min-width: 0; margin: 0 2px; font-size: 14px; font-weight: 600; color: var(--sub); overflow-wrap: anywhere; }
+.msg .go p.ok { color: var(--green); }
+.msg .go p.bad { color: var(--red); }
+button.send {
+  appearance: none; border: 0; flex: none; min-width: 96px; min-height: 44px; padding: 0 20px; border-radius: 999px; font: inherit; font-size: 16px; font-weight: 600;
+  color: #fff; background: var(--blue); cursor: pointer;
+}
+button.send:active { opacity: 0.8; }
+button.send:disabled { opacity: 0.4; cursor: default; }
 .tip { margin: 28px 8px 0; text-align: center; font-size: 13px; color: var(--sub); }
 @media (prefers-reduced-motion: reduce) { .pick, .bar i { transition: none; } }
 </style>
@@ -257,6 +276,14 @@ button.retry:active { opacity: 0.6; }
   </label>
   <p id="summary" role="status" aria-live="polite"></p>
   <ul id="list"></ul>
+  <form class="msg" id="msgForm" autocomplete="off">
+    <label for="msg">Or send a message</label>
+    <textarea id="msg" rows="3" placeholder="Paste a link or type a note" enterkeyhint="send"></textarea>
+    <div class="go">
+      <p id="msgStatus" role="status" aria-live="polite"></p>
+      <button type="submit" class="send" id="msgSend" disabled>Send</button>
+    </div>
+  </form>
   <p class="tip">Tip: Add this page to your Home Screen for one tap next time.</p>
 </main>
 <div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
@@ -644,10 +671,65 @@ button.retry:active { opacity: 0.6; }
     if (files && files.length) add(Array.prototype.slice.call(files));
   });
 
+  // Quick message: a link opens from the PC's toast, anything else lands on the PC clipboard.
+  var msgForm = document.getElementById('msgForm');
+  var msg = document.getElementById('msg');
+  var msgSend = document.getElementById('msgSend');
+  var msgStatus = document.getElementById('msgStatus');
+  var msgBusy = false;
+
+  function msgState(text, cls) {
+    msgStatus.textContent = text || '';
+    msgStatus.className = cls || '';
+  }
+
+  function msgReady() {
+    msgSend.disabled = msgBusy || !msg.value.trim();
+  }
+
+  function sendMsg() {
+    var text = msg.value.trim();
+    if (!text || msgBusy) return;
+    msgBusy = true;
+    msgReady();
+    msgState('Sending…');
+    var link = /^https?:\/\/\S+$/i.test(text);
+    var x = new XMLHttpRequest();
+    x.open('POST', root + '/text');
+    x.setRequestHeader('Content-Type', 'text/plain; charset=utf-8');
+    x.onload = function () {
+      var r = null;
+      try { r = JSON.parse(x.responseText); } catch (e) {}
+      msgBusy = false;
+      if (x.status === 200 && r && r.ok) {
+        if (msg.value.trim() === text) msg.value = '';
+        msgState(link ? 'Link sent. Click the toast on ' + pc + ' to open it.' : 'Copied to the clipboard on ' + pc + '.', 'ok');
+      } else {
+        msgState((r && r.message) || 'Failed (HTTP ' + x.status + ')', 'bad');
+      }
+      msgReady();
+    };
+    x.onerror = function () {
+      msgBusy = false;
+      msgState('Connection lost', 'bad');
+      msgReady();
+    };
+    x.ontimeout = x.onerror;
+    x.onabort = x.onerror;
+    x.send(text);
+  }
+
+  msgForm.addEventListener('submit', function (e) { e.preventDefault(); sendMsg(); });
+  msg.addEventListener('input', function () { msgReady(); if (msgStatus.className !== '') msgState(''); });
+  // Enter adds a line on a phone keyboard; Ctrl/Cmd+Enter sends from a real keyboard.
+  msg.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendMsg(); }
+  });
+
   initDest();
 
   window.addEventListener('beforeunload', function (e) {
-    var busy = items.some(function (it) { return it.state === 'sending' || it.state === 'queued'; });
+    var busy = msgBusy || items.some(function (it) { return it.state === 'sending' || it.state === 'queued'; });
     if (!busy) return;
     e.preventDefault();
     e.returnValue = '';
@@ -685,7 +767,7 @@ async function listen(server, port) {
   }
 }
 
-async function startDropServer({ port = 47800, token, dir, roots, pcName = 'your PC', onReceived, onProgress } = {}) {
+async function startDropServer({ port = 47800, token, dir, roots, pcName = 'your PC', onReceived, onProgress, onText } = {}) {
   if (!token) throw new Error('A token is required.');
   const tokenBuf = Buffer.from(String(token));
   const page = renderPage(pcName);
@@ -774,6 +856,37 @@ async function startDropServer({ port = 47800, token, dir, roots, pcName = 'your
     }
   }
 
+  // A quick message from the page. Collected whole (it is small), never written to disk.
+  function receiveText(req, res) {
+    const declared = parseInt(req.headers['content-length'], 10);
+    if (declared > MAX_TEXT) return fail(req, res, folderError(413, 'That message is too long.'));
+    const chunks = [];
+    let size = 0;
+    let over = false;
+    req.on('data', (c) => {
+      if (over) return;
+      size += c.length;
+      if (size > MAX_TEXT) {
+        over = true;
+        chunks.length = 0;
+        return fail(req, res, folderError(413, 'That message is too long.'));
+      }
+      chunks.push(c);
+    });
+    req.on('error', () => {});
+    req.on('end', () => {
+      if (over) return;
+      const message = Buffer.concat(chunks).toString('utf8').replace(/\r\n?/g, '\n').trim();
+      if (!message) return json(res, 400, { ok: false, message: 'The message is empty.' });
+      try {
+        onText?.({ message });
+      } catch {
+        return json(res, 500, { ok: false, message: 'Could not deliver the message on the PC.' });
+      }
+      json(res, 200, { ok: true });
+    });
+  }
+
   // Lists what the phone may pick from. Only ids and display names go out, never PC paths.
   async function folders(req, res, query) {
     try {
@@ -821,6 +934,7 @@ async function startDropServer({ port = 47800, token, dir, roots, pcName = 'your
       return reply(res, 200, 'text/html; charset=utf-8', req.method === 'HEAD' ? undefined : page);
     }
     if (req.method === 'POST' && rest === '/upload') return void receive(req, res);
+    if (req.method === 'POST' && rest === '/text') return void receiveText(req, res);
     if (req.method === 'GET' && rest === '/folders') return void folders(req, res, new URLSearchParams(queryString));
     text(res, 404, 'Not found');
   });

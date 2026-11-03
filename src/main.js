@@ -552,7 +552,7 @@ function received(f) {
   }, 1500);
 }
 
-// Text shared to the inbox: links open on click, anything else goes on the clipboard.
+// Text from the inbox or the drop page: links open on click, anything else goes on the clipboard.
 function receivedText({ title, message, click }) {
   const text = String(message || '').trim();
   const url = [click, text].find((u) => /^https?:\/\/\S+$/i.test(u || ''));
@@ -568,7 +568,7 @@ async function startReceiving() {
   const r = settings.receive;
   if (!drop) {
     try {
-      drop = await dropserver.startDropServer({ port: r.port, token: r.token, roots: dropRoots, pcName: os.hostname(), onReceived: received });
+      drop = await dropserver.startDropServer({ port: r.port, token: r.token, roots: dropRoots, pcName: os.hostname(), onReceived: received, onText: receivedText });
       dropError = '';
       if (drop.port !== r.port) {
         r.port = drop.port;

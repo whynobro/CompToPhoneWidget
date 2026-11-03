@@ -17,6 +17,7 @@ const fresh = () => {
 };
 
 const received = [];
+const texts = [];
 const progress = [];
 let srv;
 let progressHook = null;
@@ -56,6 +57,7 @@ const startServer = (extra = {}) =>
     dir: () => cur,
     pcName: 'MICHAEL-PC',
     onReceived: (f) => received.push(f),
+    onText: (t) => texts.push(t),
     onProgress: (p) => {
       progress.push(p);
       progressHook?.(p);
@@ -570,10 +572,63 @@ const tests = {
     assert.match(html, /id="sheet"/);
     assert.match(html, /X-Root/);
     assert.match(html, /localStorage/);
+    assert.match(html, /id="msgForm"/);
+    assert.match(html, /root \+ '\/text'/);
     const script = html.split('<script>')[1].split('</script>')[0];
     new Function(script);
     const uses = script.match(/innerHTML/g) || [];
     assert.strictEqual(uses.length, 1, 'only the constant check mark may use innerHTML');
+  },
+
+  async 'text: a message reaches onText trimmed, with Windows line breaks folded'() {
+    texts.length = 0;
+    const body = '  https://example.com/a?b=1  ';
+    const r = await request(srv.port, { method: 'POST', url: `/${TOKEN}/text`, headers: { 'Content-Type': 'text/plain; charset=utf-8' }, body });
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(JSON.parse(r.body), { ok: true });
+    assert.deepStrictEqual(texts, [{ message: 'https://example.com/a?b=1' }]);
+    const note = 'café \u{1F600}\r\nline two';
+    assert.strictEqual((await request(srv.port, { method: 'POST', url: `/${TOKEN}/text`, body: note })).status, 200);
+    assert.strictEqual(texts[1].message, 'café \u{1F600}\nline two');
+  },
+
+  async 'text: empty, oversized, wrong token and GET are refused without calling onText'() {
+    texts.length = 0;
+    const post = (body, url = `/${TOKEN}/text`) => request(srv.port, { method: 'POST', url, body });
+    const empty = await post('   \n ');
+    assert.strictEqual(empty.status, 400);
+    assert.strictEqual(JSON.parse(empty.body).ok, false);
+    const big = await post('x'.repeat(100 * 1024 + 1));
+    assert.strictEqual(big.status, 413);
+    assert.match(JSON.parse(big.body).message, /too long/);
+    assert.strictEqual((await post('x'.repeat(100 * 1024))).status, 200);
+    // Chunked, so the size is only known while reading.
+    const chunked = await new Promise((resolve, reject) => {
+      const req = http.request({ host: '127.0.0.1', port: srv.port, method: 'POST', path: `/${TOKEN}/text`, agent: false }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject);
+      for (let i = 0; i < 30; i++) req.write('y'.repeat(4096));
+      req.end();
+    });
+    assert.strictEqual(chunked, 413);
+    assert.strictEqual((await post('hi', '/wrongtoken/text')).status, 404);
+    assert.strictEqual((await request(srv.port, { url: `/${TOKEN}/text` })).status, 404);
+    assert.strictEqual(texts.length, 1);
+    assert.strictEqual(texts[0].message.length, 100 * 1024);
+  },
+
+  async 'text: a throwing onText answers 500 and the server keeps working'() {
+    const s = await startServer({ onText: () => { throw new Error('boom'); } });
+    try {
+      const r = await request(s.port, { method: 'POST', url: `/${TOKEN}/text`, body: 'hello' });
+      assert.strictEqual(r.status, 500);
+      assert.strictEqual(JSON.parse(r.body).ok, false);
+      assert.strictEqual((await request(s.port, { url: `/${TOKEN}` })).status, 200);
+    } finally {
+      await s.close();
+    }
   },
 
   async 'rate limit: 429 for everything after 20 bad requests, even the right token'() {
